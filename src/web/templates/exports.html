@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+
+{% block title %}Exports - RTSP Timelapse{% endblock %}
+
+{% block content %}
+<h1>Exports</h1>
+
+<div class="export-grid">
+    <div class="card">
+        <h2>Create Export</h2>
+        <form id="export-form" onsubmit="createExport(event)">
+            <div class="form-group">
+                <label for="export-camera">Camera</label>
+                <select id="export-camera" required onchange="updatePreview()">
+                    <option value="">Select camera...</option>
+                </select>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="export-start">Start Date</label>
+                    <input type="date" id="export-start" required onchange="updatePreview()">
+                </div>
+                <div class="form-group">
+                    <label for="export-end">End Date</label>
+                    <input type="date" id="export-end" required onchange="updatePreview()">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="export-preset">Preset</label>
+                <select id="export-preset" onchange="updatePreview()">
+                    <option value="standard">Standard (30fps)</option>
+                    <option value="fast_preview">Fast Preview (15fps, 480p)</option>
+                    <option value="high_quality">High Quality (60fps)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="export-fps">FPS: <span id="fps-value">30</span></label>
+                <input type="range" id="export-fps" min="1" max="60" value="30" oninput="updateFps(this.value)">
+            </div>
+
+            <div id="export-preview" class="export-preview">
+                <p class="muted">Select camera and dates to see preview</p>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block" id="export-btn">Generate Timelapse</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Export History</h2>
+        <div id="export-history">
+            <p class="loading">Loading...</p>
+        </div>
+    </div>
+</div>
+
+<div id="progress-modal" class="modal hidden">
+    <div class="modal-content modal-sm">
+        <h2>Generating Timelapse</h2>
+        <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+        </div>
+        <p id="progress-text">Processing...</p>
+    </div>
+</div>
+
+<div id="video-modal" class="modal hidden">
+    <div class="modal-content modal-video">
+        <div class="video-modal-header">
+            <h2 id="video-title">Video Playback</h2>
+            <button class="modal-close" onclick="closeVideo()">&times;</button>
+        </div>
+        <div class="video-container">
+            <video id="video-player" controls preload="metadata">
+                <source src="" type="video/mp4">
+                Your browser does not support video playback.
+            </video>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let presets = {};
+
+document.addEventListener('DOMContentLoaded', async function() {
+    await loadCameras();
+    await loadExports();
+
+    // Set default dates
+    const today = new Date();
+    const lastWeek = new Date(today);
+    lastWeek.setDate(lastWeek.getDate() - 7);
+
+    document.getElementById('export-start').value = lastWeek.toISOString().split('T')[0];
+    document.getElementById('export-end').value = today.toISOString().split('T')[0];
+});
+
+async function loadCameras() {
+    try {
+        const cameras = await api.get('/cameras');
+        const select = document.getElementById('export-camera');
+
+        cameras.forEach(cam => {
+            const option = document.createElement('option');
+            option.value = cam.name;
+            option.textContent = `${cam.name} (${cam.capture_count} captures)`;
+            select.appendChild(option);
+        });
+    } catch (e) {
+        console.error('Failed to load cameras', e);
+    }
+}
+
+async function loadExports() {
+    try {
+        const data = await api.get('/exports');
+        presets = data.presets;
+
+        const container = document.getElementById('export-history');
+
+        if (data.exports.length === 0) {
+            container.innerHTML = '<p class="muted">No exports yet</p>';
+            return;
+        }
+
+        const html = data.exports.map(exp => `
+            <div class="export-item">
+                <div class="export-info">
+                    <strong>${exp.filename}</strong>
+                    <span class="export-size">${formatSize(exp.size_bytes)}</span>
+                    <span class="export-date">${formatTime(exp.created_at)}</span>
+                </div>
+                <div class="export-actions">
+                    <button class="btn btn-sm btn-secondary" onclick="playVideo('${exp.filename}')">Play</button>
+                    <a href="/api/exports/${exp.filename}" class="btn btn-sm btn-primary" download>Download</a>
+                    <button class="btn btn-sm btn-danger" onclick="deleteExport('${exp.filename}')">Delete</button>
+                </div>
+            </div>
+        `).join('');
+
+        container.innerHTML = html;
+    } catch (e) {
+        console.error('Failed to load exports', e);
+    }
+}
+
+function updateFps(value) {
+    document.getElementById('fps-value').textContent = value;
+    updatePreview();
+}
+
+async function updatePreview() {
+    const camera = document.getElementById('export-camera').value;
+    const startDate = document.getElementById('export-start').value;
+    const endDate = document.getElementById('export-end').value;
+    const fps = parseInt(document.getElementById('export-fps').value);
+
+    const preview = document.getElementById('export-preview');
+
+    if (!camera || !startDate || !endDate) {
+        preview.innerHTML = '<p class="muted">Select camera and dates to see preview</p>';
+        return;
+    }
+
+    try {
+        const info = await api.post('/exports/calculate', {
+            camera: camera,
+            start_date: startDate,
+            end_date: endDate,
+            fps: fps
+        });
+
+        if (info.image_count === 0) {
+            preview.innerHTML = '<p class="warning">No images found in this date range</p>';
+            return;
+        }
+
+        preview.innerHTML = `
+            <div class="preview-stats">
+                <div class="stat">
+                    <span class="stat-value">${info.image_count}</span>
+                    <span class="stat-label">Images</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">${info.duration_formatted}</span>
+                    <span class="stat-label">Duration</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">~${info.estimated_size_mb.toFixed(1)} MB</span>
+                    <span class="stat-label">Est. Size</span>
+                </div>
+            </div>
+        `;
+    } catch (e) {
+        preview.innerHTML = `<p class="error">Error: ${e.message}</p>`;
+    }
+}
+
+async function createExport(event) {
+    event.preventDefault();
+
+    const camera = document.getElementById('export-camera').value;
+    const startDate = document.getElementById('export-start').value;
+    const endDate = document.getElementById('export-end').value;
+    const preset = document.getElementById('export-preset').value;
+    const fps = parseInt(document.getElementById('export-fps').value);
+
+    const btn = document.getElementById('export-btn');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+
+    document.getElementById('progress-modal').classList.remove('hidden');
+
+    try {
+        const result = await api.post('/exports', {
+            camera: camera,
+            start_date: startDate,
+            end_date: endDate,
+            preset: preset,
+            fps: fps
+        });
+
+        document.getElementById('progress-fill').style.width = '100%';
+        document.getElementById('progress-text').textContent = 'Complete!';
+
+        setTimeout(() => {
+            document.getElementById('progress-modal').classList.add('hidden');
+            loadExports();
+        }, 1000);
+
+    } catch (e) {
+        document.getElementById('progress-modal').classList.add('hidden');
+        alert('Export failed: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate Timelapse';
+    }
+}
+
+async function deleteExport(filename) {
+    if (!confirm(`Delete export "${filename}"?`)) {
+        return;
+    }
+
+    try {
+        await api.delete(`/exports/${filename}`);
+        loadExports();
+    } catch (e) {
+        alert('Failed to delete: ' + e.message);
+    }
+}
+
+function playVideo(filename) {
+    const player = document.getElementById('video-player');
+    const title = document.getElementById('video-title');
+
+    // Set video source
+    player.src = `/api/exports/${filename}/stream`;
+    title.textContent = filename;
+
+    // Show modal and play
+    document.getElementById('video-modal').classList.remove('hidden');
+    player.play().catch(e => {
+        console.log('Autoplay prevented:', e);
+    });
+}
+
+function closeVideo() {
+    const player = document.getElementById('video-player');
+    player.pause();
+    player.src = '';
+    document.getElementById('video-modal').classList.add('hidden');
+}
+
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+function formatTime(iso) {
+    return new Date(iso).toLocaleString();
+}
+</script>
+{% endblock %}

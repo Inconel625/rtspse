@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - RTSP Timelapse{% endblock %}
+
+{% block content %}
+<h1>Settings</h1>
+
+<div class="settings-grid">
+    <div class="card">
+        <h2>Storage</h2>
+        <div id="storage-info">
+            <p class="loading">Loading...</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Application Info</h2>
+        <table class="info-table">
+            <tr>
+                <td>Version</td>
+                <td>1.0.0</td>
+            </tr>
+            <tr>
+                <td>Config Directory</td>
+                <td><code>config/</code></td>
+            </tr>
+            <tr>
+                <td>Captures Directory</td>
+                <td><code>captures/</code></td>
+            </tr>
+            <tr>
+                <td>Exports Directory</td>
+                <td><code>exports/</code></td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="card full-width">
+        <h2>Recent Logs</h2>
+        <div class="log-controls">
+            <button class="btn btn-secondary btn-sm" onclick="loadLogs()">Refresh</button>
+            <select id="log-limit" onchange="loadLogs()">
+                <option value="50">50 lines</option>
+                <option value="100" selected>100 lines</option>
+                <option value="500">500 lines</option>
+            </select>
+        </div>
+        <pre id="log-viewer" class="log-viewer">Loading...</pre>
+    </div>
+
+    <div class="card">
+        <h2>Scheduled Jobs</h2>
+        <div id="jobs-list">
+            <p class="loading">Loading...</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Danger Zone</h2>
+        <p class="muted">These actions cannot be undone.</p>
+        <button class="btn btn-danger" onclick="clearOldCaptures()">Clear Old Captures</button>
+        <button class="btn btn-danger" onclick="clearAllExports()">Clear All Exports</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadStorageInfo();
+    loadLogs();
+    loadJobs();
+});
+
+async function loadStorageInfo() {
+    try {
+        const stats = await api.get('/storage');
+        const container = document.getElementById('storage-info');
+
+        const totalMB = (stats.total_size_bytes / 1024 / 1024).toFixed(1);
+        const capturesMB = (stats.captures.total_size_bytes / 1024 / 1024).toFixed(1);
+        const exportsMB = (stats.exports.total_size_bytes / 1024 / 1024).toFixed(1);
+
+        let camerasHtml = '';
+        for (const [name, data] of Object.entries(stats.captures.cameras)) {
+            const mb = (data.size_bytes / 1024 / 1024).toFixed(1);
+            camerasHtml += `<tr><td>${name}</td><td>${mb} MB</td><td>${data.file_count} files</td></tr>`;
+        }
+
+        container.innerHTML = `
+            <table class="info-table">
+                <tr>
+                    <td>Total Storage Used</td>
+                    <td colspan="2"><strong>${totalMB} MB</strong></td>
+                </tr>
+                <tr>
+                    <td>Captures</td>
+                    <td>${capturesMB} MB</td>
+                    <td>${stats.captures.total_files} files</td>
+                </tr>
+                <tr>
+                    <td>Exports</td>
+                    <td>${exportsMB} MB</td>
+                    <td>${stats.exports.total_files} files</td>
+                </tr>
+            </table>
+            ${camerasHtml ? `<h4>Per Camera</h4><table class="info-table">${camerasHtml}</table>` : ''}
+        `;
+    } catch (e) {
+        console.error('Failed to load storage info', e);
+    }
+}
+
+async function loadLogs() {
+    try {
+        const limit = document.getElementById('log-limit').value;
+        const data = await api.get(`/logs?limit=${limit}`);
+        const viewer = document.getElementById('log-viewer');
+
+        if (data.lines.length === 0) {
+            viewer.textContent = 'No log entries';
+            return;
+        }
+
+        viewer.textContent = data.lines.join('\n');
+        viewer.scrollTop = viewer.scrollHeight;
+    } catch (e) {
+        console.error('Failed to load logs', e);
+    }
+}
+
+async function loadJobs() {
+    try {
+        const data = await api.get('/schedules');
+        const container = document.getElementById('jobs-list');
+
+        if (data.jobs.length === 0) {
+            container.innerHTML = '<p class="muted">No scheduled jobs</p>';
+            return;
+        }
+
+        const html = data.jobs.map(job => `
+            <div class="job-item">
+                <span class="job-id">${job.id}</span>
+                <span class="job-next">${job.next_run ? new Date(job.next_run).toLocaleString() : 'Not scheduled'}</span>
+            </div>
+        `).join('');
+
+        container.innerHTML = html;
+    } catch (e) {
+        console.error('Failed to load jobs', e);
+    }
+}
+
+async function clearOldCaptures() {
+    alert('Feature not implemented. Manually delete old captures from the captures/ directory.');
+}
+
+async function clearAllExports() {
+    if (!confirm('Delete all exports? This cannot be undone.')) {
+        return;
+    }
+
+    try {
+        const data = await api.get('/exports');
+        for (const exp of data.exports) {
+            await api.delete(`/exports/${exp.filename}`);
+        }
+        alert('All exports deleted');
+        loadStorageInfo();
+    } catch (e) {
+        alert('Failed: ' + e.message);
+    }
+}
+</script>
+{% endblock %}

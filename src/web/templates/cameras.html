@@ -1,0 +1,442 @@
+{% extends "base.html" %}
+
+{% block title %}Cameras - RTSP Timelapse{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Cameras</h1>
+    <button class="btn btn-primary" onclick="showAddCameraModal()">Add Camera</button>
+</div>
+
+<div id="cameras-list" class="cameras-grid">
+    <p class="loading">Loading...</p>
+</div>
+
+<!-- Add/Edit Camera Modal -->
+<div id="camera-modal" class="modal hidden">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h2 id="modal-title">Add Camera</h2>
+            <button class="modal-close" onclick="hideModal()">&times;</button>
+        </div>
+        <form id="camera-form" onsubmit="saveCamera(event)">
+            <input type="hidden" id="camera-edit-name">
+
+            <!-- Latest capture preview (shown when editing) -->
+            <div id="modal-preview-container" class="modal-preview-container hidden">
+                <h3>Latest Capture</h3>
+                <div class="modal-preview">
+                    <img id="modal-preview-image" src="" alt="Latest capture">
+                    <p id="modal-preview-time" class="muted"></p>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="camera-name">Name</label>
+                <input type="text" id="camera-name" required pattern="[a-zA-Z0-9_-]+" title="Alphanumeric, underscore, and hyphen only">
+            </div>
+
+            <div class="form-group">
+                <label for="camera-url">RTSP URL</label>
+                <input type="text" id="camera-url" required placeholder="rtsp://user:pass@host:554/stream">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="testConnection()">Test Connection</button>
+                <span id="test-result"></span>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="camera-enabled" checked>
+                    Enabled
+                </label>
+            </div>
+
+            <h3>Capture Settings</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="jpeg-quality">JPEG Quality</label>
+                    <input type="number" id="jpeg-quality" value="90" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label for="timeout">Timeout (s)</label>
+                    <input type="number" id="timeout" value="10" min="1" max="60">
+                </div>
+                <div class="form-group">
+                    <label for="retries">Retries</label>
+                    <input type="number" id="retries" value="3" min="0" max="10">
+                </div>
+            </div>
+
+            <h3>Schedules</h3>
+            <div id="schedules-container"></div>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="addScheduleRow()">Add Schedule</button>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="hideModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- View Camera Modal -->
+<div id="view-modal" class="modal hidden">
+    <div class="modal-content modal-xl">
+        <div class="modal-header">
+            <h2 id="view-modal-title">Camera</h2>
+            <button class="modal-close" onclick="hideViewModal()">&times;</button>
+        </div>
+        <div class="view-camera-container">
+            <div class="view-camera-main">
+                <img id="view-camera-image" src="" alt="Camera capture">
+                <p id="view-camera-time" class="muted"></p>
+            </div>
+            <div class="view-camera-sidebar">
+                <h3>Recent Captures</h3>
+                <div id="view-camera-thumbnails" class="thumbnail-list">
+                    <p class="loading">Loading...</p>
+                </div>
+                <div class="view-camera-actions">
+                    <button class="btn btn-primary btn-block" onclick="captureNowFromView()">Capture Now</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let editingCamera = null;
+
+document.addEventListener('DOMContentLoaded', loadCameras);
+
+async function loadCameras() {
+    try {
+        const cameras = await api.get('/cameras');
+        const container = document.getElementById('cameras-list');
+
+        if (cameras.length === 0) {
+            container.innerHTML = '<p class="muted">No cameras configured. Click "Add Camera" to get started.</p>';
+            return;
+        }
+
+        const html = cameras.map(cam => `
+            <div class="camera-card">
+                <div class="camera-header">
+                    <h3>${cam.name}</h3>
+                    <span class="status-badge ${cam.enabled ? 'enabled' : 'disabled'}">
+                        ${cam.enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                </div>
+                ${cam.last_capture_path ? `
+                <div class="camera-preview" onclick="viewCamera('${cam.name}')">
+                    <img src="/api/captures/${cam.last_capture_path}" alt="Latest capture" loading="lazy">
+                    <span class="preview-time">${formatTime(cam.last_capture_time)}</span>
+                </div>
+                ` : `
+                <div class="camera-preview camera-preview-empty" onclick="captureNow('${cam.name}')">
+                    <span>No captures yet<br>Click to capture</span>
+                </div>
+                `}
+                <div class="camera-body">
+                    <p class="camera-url" title="${cam.url}">${truncateUrl(cam.url)}</p>
+                    <p><strong>${cam.capture_count}</strong> captures</p>
+                    <p><strong>${cam.schedules.filter(s => s.enabled).length}</strong> active schedules</p>
+                </div>
+                <div class="camera-actions">
+                    <button class="btn btn-sm btn-secondary" onclick="viewCamera('${cam.name}')">View</button>
+                    <button class="btn btn-sm btn-secondary" onclick="captureNow('${cam.name}')">Capture</button>
+                    <button class="btn btn-sm btn-secondary" onclick="editCamera('${cam.name}')">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteCamera('${cam.name}')">Delete</button>
+                </div>
+            </div>
+        `).join('');
+
+        container.innerHTML = html;
+    } catch (e) {
+        console.error('Failed to load cameras', e);
+    }
+}
+
+function truncateUrl(url) {
+    if (url.length > 40) {
+        return url.substring(0, 37) + '...';
+    }
+    return url;
+}
+
+function showAddCameraModal() {
+    editingCamera = null;
+    document.getElementById('modal-title').textContent = 'Add Camera';
+    document.getElementById('camera-form').reset();
+    document.getElementById('camera-name').disabled = false;
+    document.getElementById('modal-preview-container').classList.add('hidden');
+    document.getElementById('schedules-container').innerHTML = '';
+    addScheduleRow();
+    document.getElementById('camera-modal').classList.remove('hidden');
+}
+
+function hideModal() {
+    document.getElementById('camera-modal').classList.add('hidden');
+}
+
+function hideViewModal() {
+    document.getElementById('view-modal').classList.add('hidden');
+    currentViewCamera = null;
+}
+
+function formatTime(iso) {
+    if (!iso) return '';
+    const date = new Date(iso);
+    return date.toLocaleString();
+}
+
+let currentViewCamera = null;
+
+async function viewCamera(name) {
+    currentViewCamera = name;
+    document.getElementById('view-modal-title').textContent = name;
+    document.getElementById('view-modal').classList.remove('hidden');
+
+    // Load captures for this camera
+    await loadCameraCaptures(name);
+}
+
+async function loadCameraCaptures(name) {
+    try {
+        const captures = await api.get(`/captures?camera=${name}&limit=20`);
+        const thumbnails = document.getElementById('view-camera-thumbnails');
+        const mainImage = document.getElementById('view-camera-image');
+        const mainTime = document.getElementById('view-camera-time');
+
+        if (captures.length === 0) {
+            thumbnails.innerHTML = '<p class="muted">No captures yet</p>';
+            mainImage.src = '';
+            mainImage.alt = 'No captures';
+            mainTime.textContent = '';
+            return;
+        }
+
+        // Set main image to most recent
+        mainImage.src = `/api/captures/${captures[0].path}`;
+        mainTime.textContent = formatTime(captures[0].timestamp);
+
+        // Create thumbnails
+        const html = captures.map((cap, idx) => `
+            <div class="thumbnail-item ${idx === 0 ? 'active' : ''}" onclick="selectCapture('${cap.path}', '${cap.timestamp}', this)">
+                <img src="/api/captures/${cap.path}" alt="${cap.filename}" loading="lazy">
+                <span class="thumbnail-time">${formatTime(cap.timestamp)}</span>
+            </div>
+        `).join('');
+
+        thumbnails.innerHTML = html;
+    } catch (e) {
+        console.error('Failed to load captures', e);
+    }
+}
+
+function selectCapture(path, timestamp, element) {
+    document.getElementById('view-camera-image').src = `/api/captures/${path}`;
+    document.getElementById('view-camera-time').textContent = formatTime(timestamp);
+
+    // Update active state
+    document.querySelectorAll('.thumbnail-item').forEach(el => el.classList.remove('active'));
+    element.classList.add('active');
+}
+
+async function captureNowFromView() {
+    if (!currentViewCamera) return;
+    await captureNow(currentViewCamera);
+    // Reload captures
+    await loadCameraCaptures(currentViewCamera);
+    // Also reload main camera list
+    loadCameras();
+}
+
+async function editCamera(name) {
+    const cameras = await api.get('/cameras');
+    const camera = cameras.find(c => c.name === name);
+
+    if (!camera) return;
+
+    editingCamera = name;
+    document.getElementById('modal-title').textContent = 'Edit Camera';
+    document.getElementById('camera-edit-name').value = name;
+    document.getElementById('camera-name').value = name;
+    document.getElementById('camera-name').disabled = true;
+    document.getElementById('camera-url').value = camera.url;
+    document.getElementById('camera-enabled').checked = camera.enabled;
+
+    // Show latest capture preview if available
+    const previewContainer = document.getElementById('modal-preview-container');
+    const previewImage = document.getElementById('modal-preview-image');
+    const previewTime = document.getElementById('modal-preview-time');
+
+    if (camera.last_capture_path) {
+        previewImage.src = `/api/captures/${camera.last_capture_path}`;
+        previewTime.textContent = `Captured: ${formatTime(camera.last_capture_time)}`;
+        previewContainer.classList.remove('hidden');
+    } else {
+        previewContainer.classList.add('hidden');
+    }
+
+    document.getElementById('schedules-container').innerHTML = '';
+    if (camera.schedules.length > 0) {
+        camera.schedules.forEach(s => addScheduleRow(s));
+    } else {
+        addScheduleRow();
+    }
+
+    document.getElementById('camera-modal').classList.remove('hidden');
+}
+
+async function saveCamera(event) {
+    event.preventDefault();
+
+    const name = document.getElementById('camera-name').value;
+    const data = {
+        name: name,
+        url: document.getElementById('camera-url').value,
+        enabled: document.getElementById('camera-enabled').checked,
+        jpeg_quality: parseInt(document.getElementById('jpeg-quality').value),
+        timeout_seconds: parseInt(document.getElementById('timeout').value),
+        retry_count: parseInt(document.getElementById('retries').value),
+        schedules: getSchedulesFromForm()
+    };
+
+    try {
+        if (editingCamera) {
+            await api.put(`/cameras/${editingCamera}`, data);
+        } else {
+            await api.post('/cameras', data);
+        }
+        hideModal();
+        loadCameras();
+    } catch (e) {
+        alert('Failed to save camera: ' + e.message);
+    }
+}
+
+async function deleteCamera(name) {
+    if (!confirm(`Delete camera "${name}"? This will not delete existing captures.`)) {
+        return;
+    }
+
+    try {
+        await api.delete(`/cameras/${name}`);
+        loadCameras();
+    } catch (e) {
+        alert('Failed to delete camera: ' + e.message);
+    }
+}
+
+async function captureNow(name) {
+    try {
+        const result = await api.post(`/cameras/${name}/capture`);
+        if (result.success) {
+            showNotification('Capture successful!', 'success');
+            loadCameras();  // Reload to show new capture
+        } else {
+            showNotification('Capture failed: ' + result.error, 'error');
+        }
+    } catch (e) {
+        showNotification('Capture failed: ' + e.message, 'error');
+    }
+}
+
+async function testConnection() {
+    const url = document.getElementById('camera-url').value;
+    const resultEl = document.getElementById('test-result');
+
+    if (!url) {
+        resultEl.textContent = 'Enter URL first';
+        return;
+    }
+
+    resultEl.textContent = 'Testing...';
+
+    // We need to test via API with a temp camera or URL param
+    // For now, use existing camera if editing
+    if (editingCamera) {
+        try {
+            const result = await api.get(`/cameras/${editingCamera}/test`);
+            if (result.success) {
+                resultEl.innerHTML = `<span class="success">Connected: ${result.width}x${result.height}</span>`;
+            } else {
+                resultEl.innerHTML = `<span class="error">Failed: ${result.error}</span>`;
+            }
+        } catch (e) {
+            resultEl.innerHTML = `<span class="error">Error: ${e.message}</span>`;
+        }
+    } else {
+        resultEl.textContent = 'Save camera first to test';
+    }
+}
+
+function addScheduleRow(schedule = null) {
+    const container = document.getElementById('schedules-container');
+    const index = container.children.length;
+
+    const row = document.createElement('div');
+    row.className = 'schedule-row';
+    row.innerHTML = `
+        <div class="form-row">
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" name="sched-name-${index}" value="${schedule?.name || 'schedule_' + index}">
+            </div>
+            <div class="form-group">
+                <label>Frequency</label>
+                <select name="sched-freq-${index}">
+                    <option value="hourly" ${schedule?.frequency === 'hourly' ? 'selected' : ''}>Hourly</option>
+                    <option value="interval" ${schedule?.frequency === 'interval' ? 'selected' : ''}>Interval</option>
+                    <option value="x_per_day" ${schedule?.frequency === 'x_per_day' ? 'selected' : ''}>X per day</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Value</label>
+                <input type="number" name="sched-value-${index}" value="${schedule?.value || 1}" min="1">
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="sched-enabled-${index}" ${schedule?.enabled !== false ? 'checked' : ''}>
+                    Enabled
+                </label>
+            </div>
+            <button type="button" class="btn btn-sm btn-danger" onclick="this.parentElement.parentElement.remove()">Remove</button>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Window Start</label>
+                <input type="time" name="sched-start-${index}" value="${schedule?.time_window?.start || '06:00'}">
+            </div>
+            <div class="form-group">
+                <label>Window End</label>
+                <input type="time" name="sched-end-${index}" value="${schedule?.time_window?.end || '20:00'}">
+            </div>
+        </div>
+    `;
+    container.appendChild(row);
+}
+
+function getSchedulesFromForm() {
+    const container = document.getElementById('schedules-container');
+    const schedules = [];
+
+    container.querySelectorAll('.schedule-row').forEach((row, index) => {
+        schedules.push({
+            name: row.querySelector(`[name="sched-name-${index}"]`).value,
+            frequency: row.querySelector(`[name="sched-freq-${index}"]`).value,
+            value: parseInt(row.querySelector(`[name="sched-value-${index}"]`).value),
+            enabled: row.querySelector(`[name="sched-enabled-${index}"]`).checked,
+            time_window: {
+                start: row.querySelector(`[name="sched-start-${index}"]`).value,
+                end: row.querySelector(`[name="sched-end-${index}"]`).value
+            }
+        });
+    });
+
+    return schedules;
+}
+</script>
+{% endblock %}

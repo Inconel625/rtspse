@@ -1,0 +1,15 @@
+web_ui:
+  enabled: true
+  host: 0.0.0.0
+  port: 5050
+  auth_enabled: false
+  username: admin
+  password: admin
+
+storage:
+  captures_path: captures
+  exports_path: exports
+  logs_path: logs
+  max_log_size_mb: 100
+
+log_level: INFO

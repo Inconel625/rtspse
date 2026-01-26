@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - RTSP Timelapse{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="dashboard-grid">
+    <div class="card">
+        <h2>Cameras</h2>
+        <div id="cameras-status">
+            <p class="loading">Loading...</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Storage</h2>
+        <div id="storage-stats">
+            <p class="loading">Loading...</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Active Schedules</h2>
+        <div id="schedules-status">
+            <p class="loading">Loading...</p>
+        </div>
+    </div>
+
+    <div class="card full-width">
+        <h2>Recent Captures</h2>
+        <div id="recent-captures" class="captures-grid">
+            <p class="loading">Loading...</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadDashboard();
+    setInterval(loadDashboard, 30000);
+});
+
+async function loadDashboard() {
+    await Promise.all([
+        loadCamerasStatus(),
+        loadStorageStats(),
+        loadSchedulesStatus(),
+        loadRecentCaptures()
+    ]);
+}
+
+async function loadCamerasStatus() {
+    try {
+        const cameras = await api.get('/cameras');
+        const container = document.getElementById('cameras-status');
+
+        if (cameras.length === 0) {
+            container.innerHTML = '<p class="muted">No cameras configured</p>';
+            return;
+        }
+
+        const html = cameras.map(cam => `
+            <div class="status-item">
+                <span class="status-indicator ${cam.enabled ? 'online' : 'offline'}"></span>
+                <span class="status-name">${cam.name}</span>
+                <span class="status-detail">${cam.capture_count} captures</span>
+            </div>
+        `).join('');
+
+        container.innerHTML = html;
+    } catch (e) {
+        console.error('Failed to load cameras', e);
+    }
+}
+
+async function loadStorageStats() {
+    try {
+        const stats = await api.get('/storage');
+        const container = document.getElementById('storage-stats');
+
+        const totalMB = (stats.total_size_bytes / 1024 / 1024).toFixed(1);
+        const capturesMB = (stats.captures.total_size_bytes / 1024 / 1024).toFixed(1);
+        const exportsMB = (stats.exports.total_size_bytes / 1024 / 1024).toFixed(1);
+
+        container.innerHTML = `
+            <div class="storage-bar-container">
+                <div class="storage-bar">
+                    <div class="storage-bar-fill captures" style="width: ${stats.captures.total_size_bytes / stats.total_size_bytes * 100 || 0}%"></div>
+                    <div class="storage-bar-fill exports" style="width: ${stats.exports.total_size_bytes / stats.total_size_bytes * 100 || 0}%"></div>
+                </div>
+            </div>
+            <p><strong>Total:</strong> ${totalMB} MB</p>
+            <p><span class="legend-dot captures"></span> Captures: ${capturesMB} MB (${stats.captures.total_files} files)</p>
+            <p><span class="legend-dot exports"></span> Exports: ${exportsMB} MB (${stats.exports.total_files} files)</p>
+        `;
+    } catch (e) {
+        console.error('Failed to load storage stats', e);
+    }
+}
+
+async function loadSchedulesStatus() {
+    try {
+        const data = await api.get('/schedules');
+        const container = document.getElementById('schedules-status');
+
+        const enabledSchedules = data.schedules.filter(s => s.enabled);
+
+        if (enabledSchedules.length === 0) {
+            container.innerHTML = '<p class="muted">No active schedules</p>';
+            return;
+        }
+
+        const html = enabledSchedules.slice(0, 5).map(s => `
+            <div class="schedule-item">
+                <span class="schedule-name">${s.camera}</span>
+                <span class="schedule-freq">${s.frequency}</span>
+                ${s.time_window ? `<span class="schedule-window">${s.time_window.start} - ${s.time_window.end}</span>` : ''}
+            </div>
+        `).join('');
+
+        container.innerHTML = html;
+
+        if (enabledSchedules.length > 5) {
+            container.innerHTML += `<p class="muted">+ ${enabledSchedules.length - 5} more</p>`;
+        }
+    } catch (e) {
+        console.error('Failed to load schedules', e);
+    }
+}
+
+async function loadRecentCaptures() {
+    try {
+        const captures = await api.get('/captures?limit=12');
+        const container = document.getElementById('recent-captures');
+
+        if (captures.length === 0) {
+            container.innerHTML = '<p class="muted">No captures yet</p>';
+            return;
+        }
+
+        const html = captures.map(cap => `
+            <div class="capture-thumb">
+                <img src="/api/captures/${cap.path}" alt="${cap.camera}" loading="lazy">
+                <div class="capture-info">
+                    <span class="capture-camera">${cap.camera}</span>
+                    <span class="capture-time">${formatTime(cap.timestamp)}</span>
+                </div>
+            </div>
+        `).join('');
+
+        container.innerHTML = html;
+    } catch (e) {
+        console.error('Failed to load captures', e);
+    }
+}
+
+function formatTime(iso) {
+    const date = new Date(iso);
+    return date.toLocaleString();
+}
+</script>
+{% endblock %}
