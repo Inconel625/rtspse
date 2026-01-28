@@ -35,8 +35,8 @@ watchdog>=3.0.0
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/rtsp-timelapse.git
-   cd rtsp-timelapse
+   git clone https://github.com/Inconel625/rtspse.git
+   cd rtspse
    ```
 
 2. Create and activate a virtual environment:
@@ -187,7 +187,7 @@ The web UI exposes a REST API:
 ## File Organization
 
 ```
-rtsp-timelapse/
+rtspse/
 ├── config/
 │   ├── app.yaml              # Application settings
 │   ├── cameras.yaml          # Camera definitions
