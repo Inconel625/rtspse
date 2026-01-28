@@ -1,6 +1,6 @@
 presets:
   standard:
-    fps: 30
+    fps: 9
     codec: libx264
     ffmpeg_preset: medium
     pixel_format: yuv420p
@@ -28,3 +28,23 @@ export_history:
   image_count: 5
   duration_seconds: 0.16666666666666666
   file_size_bytes: 588386
+- id: 439b68d7
+  camera: House-Front-Door
+  start_date: '2026-01-20'
+  end_date: '2026-01-27'
+  preset: standard
+  output_file: House-Front-Door_20260120_20260127_439b68d7.mp4
+  created_at: '2026-01-27T23:13:51.210865'
+  image_count: 19
+  duration_seconds: 1.0
+  file_size_bytes: 1729985
+- id: 4be4c315
+  camera: House-Front-Door
+  start_date: '2026-01-20'
+  end_date: '2026-01-27'
+  preset: standard
+  output_file: House-Front-Door_20260120_20260127_4be4c315.mp4
+  created_at: '2026-01-27T23:14:25.586586'
+  image_count: 19
+  duration_seconds: 2.111111111111111
+  file_size_bytes: 1729985

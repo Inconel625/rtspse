@@ -1,0 +1,71 @@
+# Camera Configuration Example
+# Copy this file to cameras.yaml and update with your camera details
+#
+# RTSP URL Format:
+#   rtsp://[username:password@]host[:port]/path
+#
+# Common camera path examples:
+#   - Dahua: /cam/realmonitor?channel=1&subtype=0
+#   - Hikvision: /Streaming/Channels/101/
+#   - Axis: /axis-media/media.amp
+#   - Generic: /stream or /live
+#
+# Schedule Frequency Types:
+#   - hourly: Capture once per hour at minute 0
+#   - interval: Capture every N hours (value = hours between captures)
+#   - x_per_day: Distribute N captures evenly (value = total captures per day)
+
+cameras:
+  # Example camera with hourly captures during daytime
+  Front-Door:
+    url: rtsp://admin:password@192.168.1.100:554/stream
+    enabled: true
+    schedules:
+      - name: daytime_hourly
+        frequency: hourly
+        enabled: true
+        value: 1
+        time_window:
+          start: "06:00"
+          end: "20:00"
+    capture_settings:
+      jpeg_quality: 90
+      timeout_seconds: 10
+      retry_count: 3
+      retry_delay_seconds: 1.0
+
+  # Example camera with interval-based captures (every 2 hours)
+  Back-Yard:
+    url: rtsp://admin:password@192.168.1.101:554/stream
+    enabled: true
+    schedules:
+      - name: every_2_hours
+        frequency: interval
+        enabled: true
+        value: 2
+        time_window:
+          start: "05:00"
+          end: "21:00"
+    capture_settings:
+      jpeg_quality: 85
+      timeout_seconds: 15
+      retry_count: 3
+      retry_delay_seconds: 2.0
+
+  # Example camera with x_per_day captures (12 times daily)
+  Garden:
+    url: rtsp://admin:password@192.168.1.102:554/stream
+    enabled: false  # Disabled by default
+    schedules:
+      - name: twelve_per_day
+        frequency: x_per_day
+        enabled: true
+        value: 12
+        time_window:
+          start: "06:00"
+          end: "18:00"
+    capture_settings:
+      jpeg_quality: 90
+      timeout_seconds: 10
+      retry_count: 3
+      retry_delay_seconds: 1.0
