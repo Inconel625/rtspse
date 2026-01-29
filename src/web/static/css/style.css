@@ -46,6 +46,14 @@ body {
     font-size: 1.25rem;
     color: var(--primary);
     margin-right: 2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nav-logo {
+    width: 24px;
+    height: 24px;
 }
 
 .nav-links {

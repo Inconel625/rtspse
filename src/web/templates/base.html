@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}RTSP Timelapse{% endblock %}</title>
+    <title>{% block title %}RTSPSE{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
     <nav class="navbar">
-        <div class="nav-brand">RTSP Timelapse</div>
+        <div class="nav-brand"><img src="{{ url_for('static', filename='favicon.svg') }}" alt="" class="nav-logo">RTSPSE</div>
         <ul class="nav-links">
             <li><a href="{{ url_for('pages.dashboard') }}" class="{% if request.endpoint == 'pages.dashboard' %}active{% endif %}">Dashboard</a></li>
             <li><a href="{{ url_for('pages.cameras_page') }}" class="{% if request.endpoint == 'pages.cameras_page' %}active{% endif %}">Cameras</a></li>
@@ -27,7 +27,7 @@
     </main>
 
     <footer class="footer">
-        <p>RTSP Timelapse Generator</p>
+        <p>RTSPSE</p>
     </footer>
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
