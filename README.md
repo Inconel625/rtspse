@@ -10,7 +10,9 @@ A Python application that captures frames from RTSP camera streams on configurab
   - `interval` - Capture every N hours
   - `x_per_day` - Distribute N captures evenly across the day
 - **Time Windows** - Restrict captures to specific hours (e.g., 6 AM - 8 PM)
+- **Dawn/Dusk Capture Windows** - Optionally use computed sunrise/sunset times instead of static time windows, adjusting automatically with seasons via the [astral](https://github.com/sffjunkie/astral) library
 - **Timelapse Generation** - Create MP4 videos from captured frames using FFmpeg
+- **Export Time-of-Day Filter** - Filter images by time range (custom hours or dawn-to-dusk) when generating timelapses
 - **Export Presets** - Pre-configured encoding settings (standard, fast_preview, high_quality)
 - **Web UI** - Optional browser-based management interface
 - **Hot-Reload Configuration** - Changes to YAML config files are detected and applied automatically
@@ -29,6 +31,7 @@ opencv-python-headless>=4.8.0
 apscheduler>=3.10.0
 pyyaml>=6.0
 watchdog>=3.0.0
+astral>=3.2
 ```
 
 ## Installation
@@ -49,7 +52,7 @@ watchdog>=3.0.0
 
 3. Install Python dependencies:
    ```bash
-   pip install flask>=3.0.0 opencv-python-headless>=4.8.0 apscheduler>=3.10.0 pyyaml>=6.0 watchdog>=3.0.0
+   pip install flask>=3.0.0 opencv-python-headless>=4.8.0 apscheduler>=3.10.0 pyyaml>=6.0 watchdog>=3.0.0 astral>=3.2
    ```
 
 4. Install FFmpeg:
@@ -91,6 +94,11 @@ storage:
   max_log_size_mb: 100      # Max log file size before rotation
 
 log_level: INFO             # DEBUG, INFO, WARNING, ERROR
+
+# Optional: location for dawn/dusk calculations
+location:
+  latitude: 51.5074
+  longitude: -0.1278
 ```
 
 ### cameras.yaml - Camera Configuration
@@ -108,6 +116,7 @@ cameras:
         time_window:
           start: "06:00"
           end: "20:00"
+          use_dawn_dusk: false  # Use computed dawn/dusk instead of static times
     capture_settings:
       jpeg_quality: 90          # 1-100
       timeout_seconds: 10       # Connection timeout
@@ -164,9 +173,9 @@ python -m src.main --config-dir /path/to/config
 
 - **Dashboard** - Overview of cameras, schedules, recent captures, and storage
 - **Camera Management** - Add, edit, delete, and test camera connections
-- **Schedule Editor** - Visual schedule configuration
-- **Export Generator** - Create timelapses with date range selection and progress tracking
-- **Settings** - Configure application settings
+- **Schedule Editor** - Visual schedule configuration with optional dawn/dusk toggle
+- **Export Generator** - Create timelapses with date range selection, time-of-day filtering (all day, custom hours, or dawn-to-dusk), and progress tracking
+- **Settings** - Configure application settings and location (for dawn/dusk calculations)
 
 ## API Endpoints
 
@@ -181,7 +190,9 @@ The web UI exposes a REST API:
 | `/api/schedules` | GET | List all schedules with next run times |
 | `/api/captures` | GET | List captured images |
 | `/api/exports` | GET/POST | List or create exports |
-| `/api/exports/presets` | GET | List export presets |
+| `/api/exports/calculate` | POST | Preview export stats without generating |
+| `/api/settings/location` | GET/PUT | Get or update location for dawn/dusk |
+| `/api/sun` | GET | Get today's computed dawn/dusk times |
 | `/api/storage` | GET | Storage statistics |
 
 ## File Organization

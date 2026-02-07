@@ -408,10 +408,14 @@ def create_export():
     # Parse optional time-of-day filter
     start_time = None
     end_time = None
-    if data.get('start_time'):
-        start_time = datetime.strptime(data['start_time'], '%H:%M').time()
-    if data.get('end_time'):
-        end_time = datetime.strptime(data['end_time'], '%H:%M').time()
+    use_dawn_dusk = data.get('use_dawn_dusk', False)
+    if not use_dawn_dusk:
+        if data.get('start_time'):
+            start_time = datetime.strptime(data['start_time'], '%H:%M').time()
+        if data.get('end_time'):
+            end_time = datetime.strptime(data['end_time'], '%H:%M').time()
+
+    location = _config_manager.app_config.location
 
     try:
         history = _exporter.generate_timelapse(
@@ -420,7 +424,9 @@ def create_export():
             end_date=end_date,
             preset=preset,
             start_time=start_time,
-            end_time=end_time
+            end_time=end_time,
+            use_dawn_dusk=use_dawn_dusk,
+            location=location
         )
 
         _config_manager.export_history.append(history)
@@ -464,12 +470,17 @@ def calculate_export():
     # Parse optional time-of-day filter
     start_time = None
     end_time = None
-    if data.get('start_time'):
-        start_time = datetime.strptime(data['start_time'], '%H:%M').time()
-    if data.get('end_time'):
-        end_time = datetime.strptime(data['end_time'], '%H:%M').time()
+    use_dawn_dusk = data.get('use_dawn_dusk', False)
+    if not use_dawn_dusk:
+        if data.get('start_time'):
+            start_time = datetime.strptime(data['start_time'], '%H:%M').time()
+        if data.get('end_time'):
+            end_time = datetime.strptime(data['end_time'], '%H:%M').time()
 
-    info = _exporter.calculate_export_info(camera, start_date, end_date, fps, start_time, end_time)
+    location = _config_manager.app_config.location
+
+    info = _exporter.calculate_export_info(camera, start_date, end_date, fps, start_time, end_time,
+                                           use_dawn_dusk=use_dawn_dusk, location=location)
     return jsonify(info)
 
 

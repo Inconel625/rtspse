@@ -9,7 +9,7 @@ from datetime import datetime, time
 from pathlib import Path
 from typing import Optional
 
-from .models import ExportPreset, ExportHistory
+from .models import ExportPreset, ExportHistory, LocationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,25 @@ class Exporter:
         self.exports_path.mkdir(parents=True, exist_ok=True)
         self._active_exports: dict[str, ExportProgress] = {}
 
+    def _get_dawn_dusk_for_date(self, location: LocationConfig, date) -> Optional[tuple[time, time]]:
+        """Compute dawn and dusk times for a specific date and location."""
+        try:
+            from astral import LocationInfo
+            from astral.sun import sun
+
+            loc = LocationInfo(
+                name="configured",
+                region="",
+                timezone="UTC",
+                latitude=location.latitude,
+                longitude=location.longitude
+            )
+            s = sun(loc.observer, date=date)
+            return (s["dawn"].time(), s["dusk"].time())
+        except Exception as e:
+            logger.warning(f"Failed to compute dawn/dusk for {date}: {e}")
+            return None
+
     def generate_timelapse(
         self,
         camera: str,
@@ -65,7 +84,9 @@ class Exporter:
         preset: ExportPreset,
         output_name: Optional[str] = None,
         start_time: Optional[time] = None,
-        end_time: Optional[time] = None
+        end_time: Optional[time] = None,
+        use_dawn_dusk: bool = False,
+        location: Optional[LocationConfig] = None
     ) -> ExportHistory:
         """
         Generate a timelapse video from captures.
@@ -83,7 +104,8 @@ class Exporter:
             ExportHistory with details of the generated video
         """
         export_id = str(uuid.uuid4())[:8]
-        images = self._get_images_in_range(camera, start_date, end_date, start_time, end_time)
+        images = self._get_images_in_range(camera, start_date, end_date, start_time, end_time,
+                                           use_dawn_dusk=use_dawn_dusk, location=location)
 
         if not images:
             raise ExportError(f"No images found for {camera} in the specified date range")
@@ -121,8 +143,8 @@ class Exporter:
                 image_count=len(images),
                 duration_seconds=duration,
                 file_size_bytes=file_size,
-                start_time=start_time.strftime("%H:%M") if start_time else None,
-                end_time=end_time.strftime("%H:%M") if end_time else None
+                start_time="dawn/dusk" if use_dawn_dusk else (start_time.strftime("%H:%M") if start_time else None),
+                end_time="dawn/dusk" if use_dawn_dusk else (end_time.strftime("%H:%M") if end_time else None)
             )
 
             logger.info(
@@ -148,13 +170,25 @@ class Exporter:
         start_date: datetime,
         end_date: datetime,
         start_time: Optional[time] = None,
-        end_time: Optional[time] = None
+        end_time: Optional[time] = None,
+        use_dawn_dusk: bool = False,
+        location: Optional[LocationConfig] = None
     ) -> list[Path]:
         """Get sorted list of images within date range and optional time-of-day filter."""
         camera_dir = self.captures_path / camera
 
         if not camera_dir.exists():
             return []
+
+        # Pre-compute dawn/dusk cache per date if needed
+        dawn_dusk_cache: dict = {}
+        if use_dawn_dusk and location:
+            from datetime import timedelta
+            d = start_date.date()
+            end_d = end_date.date()
+            while d <= end_d:
+                dawn_dusk_cache[d] = self._get_dawn_dusk_for_date(location, d)
+                d += timedelta(days=1)
 
         images = []
 
@@ -165,15 +199,22 @@ class Exporter:
                 capture_time = datetime.strptime(date_str, "%Y-%m-%d_%H-%M-%S")
 
                 if start_date <= capture_time <= end_date:
-                    if start_time and end_time:
-                        t = capture_time.time()
+                    t = capture_time.time()
+
+                    if use_dawn_dusk and location:
+                        dd = dawn_dusk_cache.get(capture_time.date())
+                        if dd:
+                            dawn, dusk = dd
+                            if not (dawn <= t <= dusk):
+                                continue
+                    elif start_time and end_time:
                         if start_time <= end_time:
                             if not (start_time <= t <= end_time):
                                 continue
                         else:
-                            # Wraps midnight
                             if not (t >= start_time or t <= end_time):
                                 continue
+
                     images.append(img_path)
             except ValueError:
                 continue
@@ -248,10 +289,13 @@ class Exporter:
         end_date: datetime,
         fps: int,
         start_time: Optional[time] = None,
-        end_time: Optional[time] = None
+        end_time: Optional[time] = None,
+        use_dawn_dusk: bool = False,
+        location: Optional[LocationConfig] = None
     ) -> dict:
         """Calculate export statistics without generating."""
-        images = self._get_images_in_range(camera, start_date, end_date, start_time, end_time)
+        images = self._get_images_in_range(camera, start_date, end_date, start_time, end_time,
+                                           use_dawn_dusk=use_dawn_dusk, location=location)
 
         image_count = len(images)
         duration_seconds = image_count / fps if fps > 0 else 0

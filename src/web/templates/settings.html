@@ -59,6 +59,16 @@
         <h2>Location</h2>
         <p class="muted">Configure your location for dawn/dusk schedule calculations.</p>
         <div class="form-row">
+            <div class="form-group" style="flex: 2;">
+                <label for="location-search">Search by city or zip code</label>
+                <input type="text" id="location-search" placeholder="e.g. New York, 90210, London UK" onkeydown="if(event.key==='Enter'){event.preventDefault();searchLocation();}">
+            </div>
+            <div class="form-group" style="align-self: flex-end;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="searchLocation()">Search</button>
+            </div>
+        </div>
+        <div id="location-results" style="margin-bottom: 0.5em;"></div>
+        <div class="form-row">
             <div class="form-group">
                 <label for="location-lat">Latitude</label>
                 <input type="number" id="location-lat" step="0.0001" min="-90" max="90" placeholder="e.g. 51.5074">
@@ -232,8 +242,61 @@ async function saveLocation() {
     }
 }
 
+async function searchLocation() {
+    const query = document.getElementById('location-search').value.trim();
+    const resultsDiv = document.getElementById('location-results');
+
+    if (!query) {
+        resultsDiv.innerHTML = '';
+        return;
+    }
+
+    resultsDiv.innerHTML = '<span class="muted">Searching...</span>';
+
+    try {
+        const params = new URLSearchParams({ q: query, format: 'json', limit: '5', addressdetails: '1' });
+        const resp = await fetch('https://nominatim.openstreetmap.org/search?' + params, {
+            headers: { 'Accept': 'application/json' }
+        });
+
+        if (!resp.ok) throw new Error('Search request failed');
+
+        const results = await resp.json();
+
+        if (results.length === 0) {
+            resultsDiv.innerHTML = '<span class="muted">No results found.</span>';
+            return;
+        }
+
+        const html = results.map((r, i) => `
+            <div class="location-result" style="padding: 0.3em 0.5em; cursor: pointer; border-bottom: 1px solid var(--border-color, #ddd);"
+                 onclick="selectSearchResult(${r.lat}, ${r.lon}, this)"
+                 onmouseover="this.style.background='var(--hover-bg, #f0f0f0)'"
+                 onmouseout="this.style.background=''">
+                ${r.display_name}
+            </div>
+        `).join('');
+
+        resultsDiv.innerHTML = '<div style="border: 1px solid var(--border-color, #ddd); border-radius: 4px; max-height: 200px; overflow-y: auto;">' + html + '</div>';
+    } catch (e) {
+        resultsDiv.innerHTML = '<span class="muted">Search failed: ' + e.message + '</span>';
+    }
+}
+
+function selectSearchResult(lat, lng, el) {
+    document.getElementById('location-lat').value = parseFloat(lat).toFixed(4);
+    document.getElementById('location-lng').value = parseFloat(lng).toFixed(4);
+    document.getElementById('location-results').innerHTML = '';
+    document.getElementById('location-status').textContent = 'Location selected. Click Save to apply.';
+}
+
 function getGeolocation() {
     const status = document.getElementById('location-status');
+
+    if (!window.isSecureContext) {
+        status.textContent = 'Browser geolocation requires HTTPS. Please enter coordinates manually.';
+        return;
+    }
 
     if (!navigator.geolocation) {
         status.textContent = 'Geolocation is not supported by your browser.';
@@ -249,7 +312,7 @@ function getGeolocation() {
             status.textContent = 'Location detected. Click Save to apply.';
         },
         (error) => {
-            status.textContent = 'Failed to get location: ' + error.message;
+            status.textContent = 'Failed to get location. Please enter coordinates manually.';
         }
     );
 }

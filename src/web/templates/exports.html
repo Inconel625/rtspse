@@ -27,7 +27,15 @@
                 </div>
             </div>
 
-            <div class="form-row">
+            <div class="form-group">
+                <label>Time Filter</label>
+                <div class="form-row" style="gap: 1em;">
+                    <label><input type="radio" name="time-filter" value="all_day" checked onchange="toggleTimeFilter()"> All day</label>
+                    <label><input type="radio" name="time-filter" value="custom" onchange="toggleTimeFilter()"> Custom time</label>
+                    <label><input type="radio" name="time-filter" value="dawn_dusk" onchange="toggleTimeFilter()"> Dawn to dusk</label>
+                </div>
+            </div>
+            <div id="custom-time-row" class="form-row" style="display: none;">
                 <div class="form-group">
                     <label for="export-start-time">Start Time</label>
                     <input type="time" id="export-start-time" value="00:00" onchange="updatePreview()">
@@ -36,13 +44,8 @@
                     <label for="export-end-time">End Time</label>
                     <input type="time" id="export-end-time" value="23:59" onchange="updatePreview()">
                 </div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="export-all-day" checked onchange="toggleAllDay()">
-                        All day
-                    </label>
-                </div>
             </div>
+            <div id="dawn-dusk-info" style="display: none; margin-bottom: 0.5em;" class="muted"></div>
 
             <div class="form-group">
                 <label for="export-preset">Preset</label>
@@ -117,20 +120,36 @@ document.addEventListener('DOMContentLoaded', async function() {
     document.getElementById('export-end').value = today.toISOString().split('T')[0];
 
     // Initialize time inputs state
-    toggleAllDay();
+    toggleTimeFilter();
 });
 
-function toggleAllDay() {
-    const allDay = document.getElementById('export-all-day').checked;
-    const startTime = document.getElementById('export-start-time');
-    const endTime = document.getElementById('export-end-time');
+function getTimeFilterMode() {
+    return document.querySelector('input[name="time-filter"]:checked').value;
+}
 
-    startTime.disabled = allDay;
-    endTime.disabled = allDay;
+async function toggleTimeFilter() {
+    const mode = getTimeFilterMode();
+    const customRow = document.getElementById('custom-time-row');
+    const dawnDuskInfo = document.getElementById('dawn-dusk-info');
 
-    if (allDay) {
-        startTime.value = '00:00';
-        endTime.value = '23:59';
+    customRow.style.display = mode === 'custom' ? 'flex' : 'none';
+    dawnDuskInfo.style.display = mode === 'dawn_dusk' ? 'block' : 'none';
+
+    if (mode === 'dawn_dusk') {
+        try {
+            const loc = await api.get('/settings/location');
+            if (!loc.configured) {
+                dawnDuskInfo.innerHTML = '<span class="warning">Location not configured. Please set your location in Settings first.</span>';
+                updatePreview();
+                return;
+            }
+            const times = await api.get('/sun');
+            if (times.dawn && times.dusk) {
+                dawnDuskInfo.textContent = `Today: Dawn ${times.dawn} / Dusk ${times.dusk} (varies per day in date range)`;
+            }
+        } catch (e) {
+            dawnDuskInfo.innerHTML = '<span class="warning">Could not load dawn/dusk times. Check location settings.</span>';
+        }
     }
 
     updatePreview();
@@ -195,7 +214,7 @@ async function updatePreview() {
     const startDate = document.getElementById('export-start').value;
     const endDate = document.getElementById('export-end').value;
     const fps = parseInt(document.getElementById('export-fps').value);
-    const allDay = document.getElementById('export-all-day').checked;
+    const mode = getTimeFilterMode();
 
     const preview = document.getElementById('export-preview');
 
@@ -211,9 +230,11 @@ async function updatePreview() {
         fps: fps
     };
 
-    if (!allDay) {
+    if (mode === 'custom') {
         payload.start_time = document.getElementById('export-start-time').value;
         payload.end_time = document.getElementById('export-end-time').value;
+    } else if (mode === 'dawn_dusk') {
+        payload.use_dawn_dusk = true;
     }
 
     try {
@@ -253,7 +274,7 @@ async function createExport(event) {
     const endDate = document.getElementById('export-end').value;
     const preset = document.getElementById('export-preset').value;
     const fps = parseInt(document.getElementById('export-fps').value);
-    const allDay = document.getElementById('export-all-day').checked;
+    const mode = getTimeFilterMode();
 
     const btn = document.getElementById('export-btn');
     btn.disabled = true;
@@ -269,9 +290,11 @@ async function createExport(event) {
         fps: fps
     };
 
-    if (!allDay) {
+    if (mode === 'custom') {
         payload.start_time = document.getElementById('export-start-time').value;
         payload.end_time = document.getElementById('export-end-time').value;
+    } else if (mode === 'dawn_dusk') {
+        payload.use_dawn_dusk = true;
     }
 
     try {
