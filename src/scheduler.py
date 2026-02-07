@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, time, timedelta
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -255,9 +256,15 @@ class ScheduleManager:
 
         self._execute_capture(camera)
 
+    def _now_local_time(self) -> time:
+        """Get current time in the configured timezone."""
+        if self._location and self._location.timezone:
+            return datetime.now(ZoneInfo(self._location.timezone)).time()
+        return datetime.now().time()
+
     def _is_within_window(self, time_window: TimeWindow) -> bool:
         """Check if current time is within the time window."""
-        now = datetime.now().time()
+        now = self._now_local_time()
 
         if time_window.use_dawn_dusk:
             dawn_dusk = self._get_dawn_dusk_window()
@@ -284,16 +291,17 @@ class ScheduleManager:
             from astral import LocationInfo
             from astral.sun import sun
 
+            tz_str = self._location.timezone or "UTC"
             loc = LocationInfo(
                 name="configured",
                 region="",
-                timezone=self._location.timezone or "UTC",
+                timezone=tz_str,
                 latitude=self._location.latitude,
                 longitude=self._location.longitude
             )
-            s = sun(loc.observer, date=datetime.now().date())
-            dawn = s["dawn"].time()
-            dusk = s["dusk"].time()
+            s = sun(loc.observer, date=datetime.now().date(), tzinfo=ZoneInfo(tz_str))
+            dawn = s["dawn"].time().replace(tzinfo=None)
+            dusk = s["dusk"].time().replace(tzinfo=None)
             logger.debug(f"Computed dawn={dawn}, dusk={dusk}")
             return (dawn, dusk)
         except Exception as e:
@@ -320,7 +328,7 @@ class ScheduleManager:
             tw = None
 
         times = self._calculate_distributed_times(schedule.value, tw)
-        now = datetime.now().time()
+        now = self._now_local_time()
 
         for i, capture_time in enumerate(times):
             if capture_time < now:

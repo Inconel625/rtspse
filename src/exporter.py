@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, time
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from .models import ExportPreset, ExportHistory, LocationConfig
 
@@ -63,15 +64,16 @@ class Exporter:
             from astral import LocationInfo
             from astral.sun import sun
 
+            tz_str = location.timezone or "UTC"
             loc = LocationInfo(
                 name="configured",
                 region="",
-                timezone=location.timezone or "UTC",
+                timezone=tz_str,
                 latitude=location.latitude,
                 longitude=location.longitude
             )
-            s = sun(loc.observer, date=date)
-            return (s["dawn"].time(), s["dusk"].time())
+            s = sun(loc.observer, date=date, tzinfo=ZoneInfo(tz_str))
+            return (s["dawn"].time().replace(tzinfo=None), s["dusk"].time().replace(tzinfo=None))
         except Exception as e:
             logger.warning(f"Failed to compute dawn/dusk for {date}: {e}")
             return None
