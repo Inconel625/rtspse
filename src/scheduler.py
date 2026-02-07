@@ -287,7 +287,7 @@ class ScheduleManager:
             loc = LocationInfo(
                 name="configured",
                 region="",
-                timezone="UTC",
+                timezone=self._location.timezone or "UTC",
                 latitude=self._location.latitude,
                 longitude=self._location.longitude
             )

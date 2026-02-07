@@ -66,7 +66,7 @@ class Exporter:
             loc = LocationInfo(
                 name="configured",
                 region="",
-                timezone="UTC",
+                timezone=location.timezone or "UTC",
                 latitude=location.latitude,
                 longitude=location.longitude
             )

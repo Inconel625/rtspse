@@ -142,6 +142,7 @@ class LocationConfig:
     latitude: float = 0.0
     longitude: float = 0.0
     elevation: float = 0.0
+    timezone: str = ""
 
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> Optional["LocationConfig"]:
@@ -150,7 +151,8 @@ class LocationConfig:
         return cls(
             latitude=data.get("latitude", 0.0),
             longitude=data.get("longitude", 0.0),
-            elevation=data.get("elevation", 0.0)
+            elevation=data.get("elevation", 0.0),
+            timezone=data.get("timezone", "")
         )
 
 

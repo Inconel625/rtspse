@@ -568,6 +568,7 @@ def get_location():
             'latitude': loc.latitude,
             'longitude': loc.longitude,
             'elevation': loc.elevation,
+            'timezone': loc.timezone,
             'configured': True
         })
     return jsonify({'configured': False})

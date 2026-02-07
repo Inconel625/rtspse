@@ -185,12 +185,6 @@ function hideViewModal() {
     currentViewCamera = null;
 }
 
-function formatTime(iso) {
-    if (!iso) return '';
-    const date = new Date(iso);
-    return date.toLocaleString();
-}
-
 let currentViewCamera = null;
 
 async function viewCamera(name) {

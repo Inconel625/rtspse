@@ -18,6 +18,17 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+# Lazy-loaded TimezoneFinder singleton
+_timezone_finder = None
+
+
+def _get_timezone_finder():
+    global _timezone_finder
+    if _timezone_finder is None:
+        from timezonefinder import TimezoneFinder
+        _timezone_finder = TimezoneFinder()
+    return _timezone_finder
+
 # Default config directory relative to project root
 DEFAULT_CONFIG_DIR = Path(__file__).parent.parent / "config"
 
@@ -184,10 +195,21 @@ class ConfigManager:
         }
 
         if self.app_config.location:
+            loc = self.app_config.location
+            if not loc.timezone:
+                try:
+                    tf = _get_timezone_finder()
+                    tz = tf.timezone_at(lat=loc.latitude, lng=loc.longitude)
+                    if tz:
+                        loc.timezone = tz
+                        logger.info(f"Auto-detected timezone: {tz}")
+                except Exception as e:
+                    logger.warning(f"Failed to detect timezone: {e}")
             data["location"] = {
-                "latitude": self.app_config.location.latitude,
-                "longitude": self.app_config.location.longitude,
-                "elevation": self.app_config.location.elevation,
+                "latitude": loc.latitude,
+                "longitude": loc.longitude,
+                "elevation": loc.elevation,
+                "timezone": loc.timezone,
             }
 
         with open(path, "w") as f:

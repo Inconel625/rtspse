@@ -66,9 +66,21 @@ function formatDuration(seconds) {
     }
 }
 
-function formatDateTime(isoString) {
+// Configured timezone from server (null = browser default)
+let _configuredTimezone = null;
+
+function formatTime(isoString) {
+    if (!isoString) return '';
     const date = new Date(isoString);
-    return date.toLocaleString();
+    const opts = { timeZoneName: 'short' };
+    if (_configuredTimezone) {
+        opts.timeZone = _configuredTimezone;
+    }
+    return date.toLocaleString(undefined, opts);
+}
+
+function formatDateTime(isoString) {
+    return formatTime(isoString);
 }
 
 function formatDate(isoString) {
@@ -221,12 +233,23 @@ document.addEventListener('DOMContentLoaded', function() {
             link.classList.add('active');
         }
     });
+
+    // Fetch configured timezone
+    fetch('/api/settings/location')
+        .then(r => r.json())
+        .then(data => {
+            if (data.configured && data.timezone) {
+                _configuredTimezone = data.timezone;
+            }
+        })
+        .catch(() => {});
 });
 
 // Export API for use in templates
 window.api = api;
 window.formatBytes = formatBytes;
 window.formatDuration = formatDuration;
+window.formatTime = formatTime;
 window.formatDateTime = formatDateTime;
 window.showNotification = showNotification;
 window.showModal = showModal;

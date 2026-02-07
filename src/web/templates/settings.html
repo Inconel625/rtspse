@@ -174,7 +174,7 @@ async function loadJobs() {
         const html = data.jobs.map(job => `
             <div class="job-item">
                 <span class="job-id">${job.id}</span>
-                <span class="job-next">${job.next_run ? new Date(job.next_run).toLocaleString() : 'Not scheduled'}</span>
+                <span class="job-next">${job.next_run ? formatTime(job.next_run) : 'Not scheduled'}</span>
             </div>
         `).join('');
 
@@ -213,7 +213,7 @@ async function loadLocation() {
         if (loc.configured) {
             document.getElementById('location-lat').value = loc.latitude;
             document.getElementById('location-lng').value = loc.longitude;
-            status.textContent = 'Location configured.';
+            status.textContent = loc.timezone ? `Location configured. Timezone: ${loc.timezone}` : 'Location configured.';
             loadSunTimes();
         } else {
             status.textContent = 'No location configured.';
@@ -235,8 +235,16 @@ async function saveLocation() {
 
     try {
         await api.put('/settings/location', { latitude: lat, longitude: lng });
-        status.textContent = 'Location saved.';
+        // Refresh timezone from server
+        const loc = await api.get('/settings/location');
+        if (loc.timezone) {
+            _configuredTimezone = loc.timezone;
+            status.textContent = `Location saved. Timezone: ${loc.timezone}`;
+        } else {
+            status.textContent = 'Location saved.';
+        }
         loadSunTimes();
+        loadJobs();
     } catch (e) {
         status.textContent = 'Failed to save: ' + e.message;
     }

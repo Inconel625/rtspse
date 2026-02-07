@@ -11,6 +11,7 @@ A Python application that captures frames from RTSP camera streams on configurab
   - `x_per_day` - Distribute N captures evenly across the day
 - **Time Windows** - Restrict captures to specific hours (e.g., 6 AM - 8 PM)
 - **Dawn/Dusk Capture Windows** - Optionally use computed sunrise/sunset times instead of static time windows, adjusting automatically with seasons via the [astral](https://github.com/sffjunkie/astral) library
+- **Automatic Timezone Detection** - Timezone is auto-detected from configured latitude/longitude and used for accurate dawn/dusk calculations and consistent time display across the UI
 - **Timelapse Generation** - Create MP4 videos from captured frames using FFmpeg
 - **Export Time-of-Day Filter** - Filter images by time range (custom hours or dawn-to-dusk) when generating timelapses
 - **Export Presets** - Pre-configured encoding settings (standard, fast_preview, high_quality)
@@ -32,6 +33,7 @@ apscheduler>=3.10.0
 pyyaml>=6.0
 watchdog>=3.0.0
 astral>=3.2
+timezonefinder>=6.0
 ```
 
 ## Installation
@@ -52,7 +54,7 @@ astral>=3.2
 
 3. Install Python dependencies:
    ```bash
-   pip install flask>=3.0.0 opencv-python-headless>=4.8.0 apscheduler>=3.10.0 pyyaml>=6.0 watchdog>=3.0.0 astral>=3.2
+   pip install flask>=3.0.0 opencv-python-headless>=4.8.0 apscheduler>=3.10.0 pyyaml>=6.0 watchdog>=3.0.0 astral>=3.2 timezonefinder>=6.0
    ```
 
 4. Install FFmpeg:
@@ -95,10 +97,11 @@ storage:
 
 log_level: INFO             # DEBUG, INFO, WARNING, ERROR
 
-# Optional: location for dawn/dusk calculations
+# Optional: location for dawn/dusk and timezone calculations
 location:
   latitude: 51.5074
   longitude: -0.1278
+  timezone: Europe/London       # Auto-detected from lat/lng if omitted
 ```
 
 ### cameras.yaml - Camera Configuration
@@ -175,7 +178,7 @@ python -m src.main --config-dir /path/to/config
 - **Camera Management** - Add, edit, delete, and test camera connections
 - **Schedule Editor** - Visual schedule configuration with optional dawn/dusk toggle
 - **Export Generator** - Create timelapses with date range selection, time-of-day filtering (all day, custom hours, or dawn-to-dusk), and progress tracking
-- **Settings** - Configure application settings and location (for dawn/dusk calculations)
+- **Settings** - Configure application settings and location (for dawn/dusk calculations and timezone)
 
 ## API Endpoints
 
