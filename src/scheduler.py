@@ -130,7 +130,9 @@ class ScheduleManager:
         """Create interval-based capture job."""
         job_id = f"{camera.name}_{schedule.name}_interval"
 
-        trigger = IntervalTrigger(hours=schedule.value)
+        unit = schedule.interval_unit
+        trigger_kwargs = {unit: schedule.value}
+        trigger = IntervalTrigger(**trigger_kwargs)
 
         self.scheduler.add_job(
             self._execute_capture_with_window_check,
@@ -140,7 +142,7 @@ class ScheduleManager:
             replace_existing=True
         )
 
-        logger.info(f"Added interval job ({schedule.value}h) for {camera.name}: {job_id}")
+        logger.info(f"Added interval job ({schedule.value} {unit}) for {camera.name}: {job_id}")
         return job_id
 
     def _create_x_per_day_jobs(

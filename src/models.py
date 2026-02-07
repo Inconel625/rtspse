@@ -37,7 +37,8 @@ class Schedule:
     name: str
     frequency: FrequencyType
     enabled: bool = True
-    value: int = 1  # For interval (hours) or x_per_day (count)
+    value: int = 1  # For interval or x_per_day (count)
+    interval_unit: str = "hours"  # "minutes", "hours", or "days" (for interval frequency)
     time_window: Optional[TimeWindow] = None
 
     @classmethod
@@ -47,6 +48,7 @@ class Schedule:
             frequency=FrequencyType(data.get("frequency", "hourly")),
             enabled=data.get("enabled", True),
             value=data.get("value", 1),
+            interval_unit=data.get("interval_unit", "hours"),
             time_window=TimeWindow.from_dict(data.get("time_window"))
         )
 

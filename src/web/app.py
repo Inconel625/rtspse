@@ -108,6 +108,7 @@ def list_cameras():
                     'frequency': s.frequency.value,
                     'enabled': s.enabled,
                     'value': s.value,
+                    'interval_unit': s.interval_unit,
                     'time_window': {
                         'start': s.time_window.start.strftime('%H:%M') if s.time_window else None,
                         'end': s.time_window.end.strftime('%H:%M') if s.time_window else None,
@@ -153,6 +154,7 @@ def add_camera():
             frequency=FrequencyType(sched_data.get('frequency', 'hourly')),
             enabled=sched_data.get('enabled', True),
             value=sched_data.get('value', 1),
+            interval_unit=sched_data.get('interval_unit', 'hours'),
             time_window=tw
         ))
 
@@ -207,6 +209,7 @@ def update_camera(name):
                 frequency=FrequencyType(sched_data.get('frequency', 'hourly')),
                 enabled=sched_data.get('enabled', True),
                 value=sched_data.get('value', 1),
+                interval_unit=sched_data.get('interval_unit', 'hours'),
                 time_window=tw
             ))
         camera.schedules = schedules
@@ -285,6 +288,7 @@ def list_schedules():
                 'frequency': schedule.frequency.value,
                 'enabled': schedule.enabled,
                 'value': schedule.value,
+                'interval_unit': schedule.interval_unit,
                 'time_window': {
                     'start': schedule.time_window.start.strftime('%H:%M') if schedule.time_window else None,
                     'end': schedule.time_window.end.strftime('%H:%M') if schedule.time_window else None,

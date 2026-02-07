@@ -367,7 +367,7 @@ async function testConnection() {
     }
 }
 
-function addScheduleRow(schedule = null) {
+async function addScheduleRow(schedule = null) {
     const container = document.getElementById('schedules-container');
     const index = container.children.length;
     const useDawnDusk = schedule?.time_window?.use_dawn_dusk || false;
@@ -382,15 +382,23 @@ function addScheduleRow(schedule = null) {
             </div>
             <div class="form-group">
                 <label>Frequency</label>
-                <select name="sched-freq-${index}">
-                    <option value="hourly" ${schedule?.frequency === 'hourly' ? 'selected' : ''}>Hourly</option>
-                    <option value="interval" ${schedule?.frequency === 'interval' ? 'selected' : ''}>Interval</option>
-                    <option value="x_per_day" ${schedule?.frequency === 'x_per_day' ? 'selected' : ''}>X per day</option>
+                <select name="sched-freq-${index}" title="How often to capture frames" onchange="toggleIntervalUnit(${index})">
+                    <option value="hourly" ${schedule?.frequency === 'hourly' ? 'selected' : ''} title="Capture once per hour at the top of the hour">Hourly</option>
+                    <option value="interval" ${schedule?.frequency === 'interval' ? 'selected' : ''} title="Capture every N minutes, hours, or days">Interval</option>
+                    <option value="x_per_day" ${schedule?.frequency === 'x_per_day' ? 'selected' : ''} title="Distribute N captures evenly across the time window">X per day</option>
                 </select>
             </div>
             <div class="form-group">
                 <label>Value</label>
                 <input type="number" name="sched-value-${index}" value="${schedule?.value || 1}" min="1">
+            </div>
+            <div class="form-group sched-unit-group-${index}" style="display:${schedule?.frequency === 'interval' ? '' : 'none'}">
+                <label>Unit</label>
+                <select name="sched-unit-${index}">
+                    <option value="minutes" ${(schedule?.interval_unit || 'hours') === 'minutes' ? 'selected' : ''}>Minutes</option>
+                    <option value="hours" ${(schedule?.interval_unit || 'hours') === 'hours' ? 'selected' : ''}>Hours</option>
+                    <option value="days" ${(schedule?.interval_unit || 'hours') === 'days' ? 'selected' : ''}>Days</option>
+                </select>
             </div>
             <div class="form-group">
                 <label>
@@ -419,6 +427,18 @@ function addScheduleRow(schedule = null) {
         </div>
     `;
     container.appendChild(row);
+
+    if (useDawnDusk) {
+        try {
+            const times = await api.get('/sun');
+            if (times.dawn && times.dusk) {
+                row.querySelector(`[name="sched-start-${index}"]`).value = times.dawn;
+                row.querySelector(`[name="sched-end-${index}"]`).value = times.dusk;
+            }
+        } catch (e) {
+            // Leave defaults if sun times unavailable
+        }
+    }
 }
 
 async function toggleDawnDusk(index) {
@@ -441,14 +461,32 @@ async function toggleDawnDusk(index) {
             checkbox.checked = false;
             return;
         }
+        // Show today's dawn/dusk in the time fields
+        try {
+            const times = await api.get('/sun');
+            if (times.dawn && times.dusk) {
+                startInput.value = times.dawn;
+                endInput.value = times.dusk;
+            }
+        } catch (e) {
+            // Leave existing values if sun times unavailable
+        }
         startInput.disabled = true;
         endInput.disabled = true;
         hint.style.display = 'inline';
     } else {
         startInput.disabled = false;
         endInput.disabled = false;
+        startInput.value = '06:00';
+        endInput.value = '20:00';
         hint.style.display = 'none';
     }
+}
+
+function toggleIntervalUnit(index) {
+    const freq = document.querySelector(`[name="sched-freq-${index}"]`).value;
+    const unitGroup = document.querySelector(`.sched-unit-group-${index}`);
+    unitGroup.style.display = freq === 'interval' ? '' : 'none';
 }
 
 function getSchedulesFromForm() {
@@ -460,6 +498,7 @@ function getSchedulesFromForm() {
             name: row.querySelector(`[name="sched-name-${index}"]`).value,
             frequency: row.querySelector(`[name="sched-freq-${index}"]`).value,
             value: parseInt(row.querySelector(`[name="sched-value-${index}"]`).value),
+            interval_unit: row.querySelector(`[name="sched-unit-${index}"]`).value,
             enabled: row.querySelector(`[name="sched-enabled-${index}"]`).checked,
             time_window: {
                 start: row.querySelector(`[name="sched-start-${index}"]`).value,

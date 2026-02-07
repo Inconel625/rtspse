@@ -7,7 +7,7 @@ A Python application that captures frames from RTSP camera streams on configurab
 - **RTSP Frame Capture** - Captures frames from any RTSP-compatible camera using OpenCV
 - **Flexible Scheduling** - Three scheduling modes:
   - `hourly` - Capture once per hour with optional time windows
-  - `interval` - Capture every N hours
+  - `interval` - Capture every N minutes, hours, or days
   - `x_per_day` - Distribute N captures evenly across the day
 - **Time Windows** - Restrict captures to specific hours (e.g., 6 AM - 8 PM)
 - **Dawn/Dusk Capture Windows** - Optionally use computed sunrise/sunset times instead of static time windows, adjusting automatically with seasons via the [astral](https://github.com/sffjunkie/astral) library
@@ -116,6 +116,7 @@ cameras:
         frequency: hourly       # hourly, interval, or x_per_day
         enabled: true
         value: 1                # Depends on frequency type
+        interval_unit: hours    # minutes, hours, or days (for interval frequency)
         time_window:
           start: "06:00"
           end: "20:00"
@@ -132,7 +133,7 @@ cameras:
 | Type | Value Meaning | Example |
 |------|--------------|---------|
 | `hourly` | Captures per hour (always 1) | Capture at minute 0 each hour |
-| `interval` | Hours between captures | `value: 2` = every 2 hours |
+| `interval` | Interval between captures | `value: 30, interval_unit: minutes` = every 30 min |
 | `x_per_day` | Total captures per day | `value: 12` = 12 times daily |
 
 ### exports.yaml - Export Presets

@@ -300,6 +300,7 @@ class ConfigManager:
                     "frequency": schedule.frequency.value,
                     "enabled": schedule.enabled,
                     "value": schedule.value,
+                    "interval_unit": schedule.interval_unit,
                 }
                 if schedule.time_window:
                     tw_data = {
