@@ -174,6 +174,7 @@ def main() -> int:
         schedule_manager = ScheduleManager()
 
         schedule_manager.set_capture_callback(capture_callback)
+        schedule_manager.set_location(config_manager.app_config.location)
         schedule_manager.load_cameras(config_manager.cameras)
         schedule_manager.start()
 

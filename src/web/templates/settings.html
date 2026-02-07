@@ -56,6 +56,27 @@
     </div>
 
     <div class="card">
+        <h2>Location</h2>
+        <p class="muted">Configure your location for dawn/dusk schedule calculations.</p>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="location-lat">Latitude</label>
+                <input type="number" id="location-lat" step="0.0001" min="-90" max="90" placeholder="e.g. 51.5074">
+            </div>
+            <div class="form-group">
+                <label for="location-lng">Longitude</label>
+                <input type="number" id="location-lng" step="0.0001" min="-180" max="180" placeholder="e.g. -0.1278">
+            </div>
+        </div>
+        <div class="form-row">
+            <button class="btn btn-secondary btn-sm" onclick="getGeolocation()">Get Current Location</button>
+            <button class="btn btn-primary btn-sm" onclick="saveLocation()">Save Location</button>
+        </div>
+        <div id="location-status" class="muted" style="margin-top: 0.5em;"></div>
+        <div id="sun-times" style="margin-top: 0.5em;"></div>
+    </div>
+
+    <div class="card">
         <h2>Danger Zone</h2>
         <p class="muted">These actions cannot be undone.</p>
         <button class="btn btn-danger" onclick="clearOldCaptures()">Clear Old Captures</button>
@@ -70,6 +91,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadStorageInfo();
     loadLogs();
     loadJobs();
+    loadLocation();
 });
 
 async function loadStorageInfo() {
@@ -170,6 +192,78 @@ async function clearAllExports() {
         loadStorageInfo();
     } catch (e) {
         alert('Failed: ' + e.message);
+    }
+}
+
+async function loadLocation() {
+    try {
+        const loc = await api.get('/settings/location');
+        const status = document.getElementById('location-status');
+
+        if (loc.configured) {
+            document.getElementById('location-lat').value = loc.latitude;
+            document.getElementById('location-lng').value = loc.longitude;
+            status.textContent = 'Location configured.';
+            loadSunTimes();
+        } else {
+            status.textContent = 'No location configured.';
+        }
+    } catch (e) {
+        console.error('Failed to load location', e);
+    }
+}
+
+async function saveLocation() {
+    const lat = parseFloat(document.getElementById('location-lat').value);
+    const lng = parseFloat(document.getElementById('location-lng').value);
+    const status = document.getElementById('location-status');
+
+    if (isNaN(lat) || isNaN(lng)) {
+        status.textContent = 'Please enter valid latitude and longitude.';
+        return;
+    }
+
+    try {
+        await api.put('/settings/location', { latitude: lat, longitude: lng });
+        status.textContent = 'Location saved.';
+        loadSunTimes();
+    } catch (e) {
+        status.textContent = 'Failed to save: ' + e.message;
+    }
+}
+
+function getGeolocation() {
+    const status = document.getElementById('location-status');
+
+    if (!navigator.geolocation) {
+        status.textContent = 'Geolocation is not supported by your browser.';
+        return;
+    }
+
+    status.textContent = 'Getting location...';
+
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            document.getElementById('location-lat').value = position.coords.latitude.toFixed(4);
+            document.getElementById('location-lng').value = position.coords.longitude.toFixed(4);
+            status.textContent = 'Location detected. Click Save to apply.';
+        },
+        (error) => {
+            status.textContent = 'Failed to get location: ' + error.message;
+        }
+    );
+}
+
+async function loadSunTimes() {
+    try {
+        const times = await api.get('/sun');
+        const container = document.getElementById('sun-times');
+
+        if (times.dawn && times.dusk) {
+            container.innerHTML = `<strong>Today:</strong> Dawn ${times.dawn} / Dusk ${times.dusk}`;
+        }
+    } catch (e) {
+        // Location not configured or calculation failed - ignore
     }
 }
 </script>

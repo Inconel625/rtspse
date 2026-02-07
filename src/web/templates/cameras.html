@@ -376,6 +376,7 @@ async function testConnection() {
 function addScheduleRow(schedule = null) {
     const container = document.getElementById('schedules-container');
     const index = container.children.length;
+    const useDawnDusk = schedule?.time_window?.use_dawn_dusk || false;
 
     const row = document.createElement('div');
     row.className = 'schedule-row';
@@ -408,15 +409,52 @@ function addScheduleRow(schedule = null) {
         <div class="form-row">
             <div class="form-group">
                 <label>Window Start</label>
-                <input type="time" name="sched-start-${index}" value="${schedule?.time_window?.start || '06:00'}">
+                <input type="time" name="sched-start-${index}" value="${schedule?.time_window?.start || '06:00'}" ${useDawnDusk ? 'disabled' : ''}>
             </div>
             <div class="form-group">
                 <label>Window End</label>
-                <input type="time" name="sched-end-${index}" value="${schedule?.time_window?.end || '20:00'}">
+                <input type="time" name="sched-end-${index}" value="${schedule?.time_window?.end || '20:00'}" ${useDawnDusk ? 'disabled' : ''}>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="sched-dawn-dusk-${index}" ${useDawnDusk ? 'checked' : ''} onchange="toggleDawnDusk(${index})">
+                    Use dawn/dusk
+                </label>
+                <span class="dawn-dusk-hint-${index} muted" style="display:${useDawnDusk ? 'inline' : 'none'}; font-size: 0.85em;">(computed from location)</span>
             </div>
         </div>
     `;
     container.appendChild(row);
+}
+
+async function toggleDawnDusk(index) {
+    const checkbox = document.querySelector(`[name="sched-dawn-dusk-${index}"]`);
+    const startInput = document.querySelector(`[name="sched-start-${index}"]`);
+    const endInput = document.querySelector(`[name="sched-end-${index}"]`);
+    const hint = document.querySelector(`.dawn-dusk-hint-${index}`);
+
+    if (checkbox.checked) {
+        // Check if location is configured
+        try {
+            const loc = await api.get('/settings/location');
+            if (!loc.configured) {
+                alert('Please configure your location in Settings first before enabling dawn/dusk mode.');
+                checkbox.checked = false;
+                return;
+            }
+        } catch (e) {
+            alert('Failed to check location configuration.');
+            checkbox.checked = false;
+            return;
+        }
+        startInput.disabled = true;
+        endInput.disabled = true;
+        hint.style.display = 'inline';
+    } else {
+        startInput.disabled = false;
+        endInput.disabled = false;
+        hint.style.display = 'none';
+    }
 }
 
 function getSchedulesFromForm() {
@@ -431,7 +469,8 @@ function getSchedulesFromForm() {
             enabled: row.querySelector(`[name="sched-enabled-${index}"]`).checked,
             time_window: {
                 start: row.querySelector(`[name="sched-start-${index}"]`).value,
-                end: row.querySelector(`[name="sched-end-${index}"]`).value
+                end: row.querySelector(`[name="sched-end-${index}"]`).value,
+                use_dawn_dusk: row.querySelector(`[name="sched-dawn-dusk-${index}"]`).checked
             }
         });
     });

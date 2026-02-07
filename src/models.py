@@ -18,6 +18,7 @@ class TimeWindow:
     """Time window for schedule execution."""
     start: time = field(default_factory=lambda: time(0, 0))
     end: time = field(default_factory=lambda: time(23, 59))
+    use_dawn_dusk: bool = False
 
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> Optional["TimeWindow"]:
@@ -25,7 +26,8 @@ class TimeWindow:
             return None
         return cls(
             start=time.fromisoformat(data.get("start", "00:00")),
-            end=time.fromisoformat(data.get("end", "23:59"))
+            end=time.fromisoformat(data.get("end", "23:59")),
+            use_dawn_dusk=data.get("use_dawn_dusk", False)
         )
 
 
@@ -135,11 +137,30 @@ class StorageConfig:
 
 
 @dataclass
+class LocationConfig:
+    """Location configuration for solar calculations."""
+    latitude: float = 0.0
+    longitude: float = 0.0
+    elevation: float = 0.0
+
+    @classmethod
+    def from_dict(cls, data: Optional[dict]) -> Optional["LocationConfig"]:
+        if data is None:
+            return None
+        return cls(
+            latitude=data.get("latitude", 0.0),
+            longitude=data.get("longitude", 0.0),
+            elevation=data.get("elevation", 0.0)
+        )
+
+
+@dataclass
 class AppConfig:
     """Application configuration."""
     web_ui: WebUIConfig = field(default_factory=WebUIConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     log_level: str = "INFO"
+    location: Optional[LocationConfig] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -161,10 +182,13 @@ class AppConfig:
             max_log_size_mb=storage_data.get("max_log_size_mb", 100)
         )
 
+        location = LocationConfig.from_dict(data.get("location"))
+
         return cls(
             web_ui=web_ui,
             storage=storage,
-            log_level=data.get("log_level", "INFO")
+            log_level=data.get("log_level", "INFO"),
+            location=location
         )
 
 
@@ -177,6 +201,8 @@ class PendingExport:
     end_date: str
     preset: str = "standard"
     auto_generate: bool = False
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "PendingExport":
@@ -186,7 +212,9 @@ class PendingExport:
             start_date=data.get("start_date", ""),
             end_date=data.get("end_date", ""),
             preset=data.get("preset", "standard"),
-            auto_generate=data.get("auto_generate", False)
+            auto_generate=data.get("auto_generate", False),
+            start_time=data.get("start_time"),
+            end_time=data.get("end_time")
         )
 
 
@@ -203,6 +231,8 @@ class ExportHistory:
     image_count: int
     duration_seconds: float
     file_size_bytes: int
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "ExportHistory":
@@ -216,5 +246,7 @@ class ExportHistory:
             created_at=data.get("created_at", ""),
             image_count=data.get("image_count", 0),
             duration_seconds=data.get("duration_seconds", 0.0),
-            file_size_bytes=data.get("file_size_bytes", 0)
+            file_size_bytes=data.get("file_size_bytes", 0),
+            start_time=data.get("start_time"),
+            end_time=data.get("end_time")
         )

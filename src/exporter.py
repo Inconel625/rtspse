@@ -5,7 +5,7 @@ import os
 import subprocess
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from typing import Optional
 
@@ -63,7 +63,9 @@ class Exporter:
         start_date: datetime,
         end_date: datetime,
         preset: ExportPreset,
-        output_name: Optional[str] = None
+        output_name: Optional[str] = None,
+        start_time: Optional[time] = None,
+        end_time: Optional[time] = None
     ) -> ExportHistory:
         """
         Generate a timelapse video from captures.
@@ -74,12 +76,14 @@ class Exporter:
             end_date: End date for captures
             preset: Export preset configuration
             output_name: Optional custom output filename
+            start_time: Optional daily start time filter
+            end_time: Optional daily end time filter
 
         Returns:
             ExportHistory with details of the generated video
         """
         export_id = str(uuid.uuid4())[:8]
-        images = self._get_images_in_range(camera, start_date, end_date)
+        images = self._get_images_in_range(camera, start_date, end_date, start_time, end_time)
 
         if not images:
             raise ExportError(f"No images found for {camera} in the specified date range")
@@ -116,7 +120,9 @@ class Exporter:
                 created_at=datetime.now().isoformat(),
                 image_count=len(images),
                 duration_seconds=duration,
-                file_size_bytes=file_size
+                file_size_bytes=file_size,
+                start_time=start_time.strftime("%H:%M") if start_time else None,
+                end_time=end_time.strftime("%H:%M") if end_time else None
             )
 
             logger.info(
@@ -140,9 +146,11 @@ class Exporter:
         self,
         camera: str,
         start_date: datetime,
-        end_date: datetime
+        end_date: datetime,
+        start_time: Optional[time] = None,
+        end_time: Optional[time] = None
     ) -> list[Path]:
-        """Get sorted list of images within date range."""
+        """Get sorted list of images within date range and optional time-of-day filter."""
         camera_dir = self.captures_path / camera
 
         if not camera_dir.exists():
@@ -157,6 +165,15 @@ class Exporter:
                 capture_time = datetime.strptime(date_str, "%Y-%m-%d_%H-%M-%S")
 
                 if start_date <= capture_time <= end_date:
+                    if start_time and end_time:
+                        t = capture_time.time()
+                        if start_time <= end_time:
+                            if not (start_time <= t <= end_time):
+                                continue
+                        else:
+                            # Wraps midnight
+                            if not (t >= start_time or t <= end_time):
+                                continue
                     images.append(img_path)
             except ValueError:
                 continue
@@ -229,10 +246,12 @@ class Exporter:
         camera: str,
         start_date: datetime,
         end_date: datetime,
-        fps: int
+        fps: int,
+        start_time: Optional[time] = None,
+        end_time: Optional[time] = None
     ) -> dict:
         """Calculate export statistics without generating."""
-        images = self._get_images_in_range(camera, start_date, end_date)
+        images = self._get_images_in_range(camera, start_date, end_date, start_time, end_time)
 
         image_count = len(images)
         duration_seconds = image_count / fps if fps > 0 else 0

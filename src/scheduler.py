@@ -8,7 +8,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from .models import CameraConfig, FrequencyType, Schedule, TimeWindow
+from .models import CameraConfig, FrequencyType, LocationConfig, Schedule, TimeWindow
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,11 @@ class ScheduleManager:
         self._capture_callback: Optional[Callable[[CameraConfig], None]] = None
         self._cameras: dict[str, CameraConfig] = {}
         self._job_ids: dict[str, list[str]] = {}  # camera_name -> list of job IDs
+        self._location: Optional[LocationConfig] = None
+
+    def set_location(self, location: Optional[LocationConfig]) -> None:
+        """Set the location for dawn/dusk calculations."""
+        self._location = location
 
     def set_capture_callback(self, callback: Callable[[CameraConfig], None]) -> None:
         """Set the callback function for capture jobs."""
@@ -90,18 +95,28 @@ class ScheduleManager:
 
         trigger_kwargs = {"minute": 0}
 
-        if schedule.time_window:
-            trigger_kwargs["hour"] = self._get_hour_range(schedule.time_window)
+        if schedule.time_window and schedule.time_window.use_dawn_dusk:
+            # Fire every hour, check dawn/dusk at runtime
+            trigger = CronTrigger(**trigger_kwargs)
+            self.scheduler.add_job(
+                self._execute_capture_with_window_check,
+                trigger=trigger,
+                id=job_id,
+                args=[camera, schedule.time_window],
+                replace_existing=True
+            )
+        else:
+            if schedule.time_window:
+                trigger_kwargs["hour"] = self._get_hour_range(schedule.time_window)
 
-        trigger = CronTrigger(**trigger_kwargs)
-
-        self.scheduler.add_job(
-            self._execute_capture,
-            trigger=trigger,
-            id=job_id,
-            args=[camera],
-            replace_existing=True
-        )
+            trigger = CronTrigger(**trigger_kwargs)
+            self.scheduler.add_job(
+                self._execute_capture,
+                trigger=trigger,
+                id=job_id,
+                args=[camera],
+                replace_existing=True
+            )
 
         logger.info(f"Added hourly job for {camera.name}: {job_id}")
         return job_id
@@ -134,26 +149,43 @@ class ScheduleManager:
     ) -> list[str]:
         """Create X captures per day distributed across time window."""
         job_ids = []
-        times = self._calculate_distributed_times(schedule.value, schedule.time_window)
 
-        for i, capture_time in enumerate(times):
-            job_id = f"{camera.name}_{schedule.name}_daily_{i}"
-
-            trigger = CronTrigger(
-                hour=capture_time.hour,
-                minute=capture_time.minute
-            )
-
+        if schedule.time_window and schedule.time_window.use_dawn_dusk:
+            # Use a daily recalculation job that schedules captures dynamically
+            recalc_job_id = f"{camera.name}_{schedule.name}_dawn_dusk_recalc"
+            trigger = CronTrigger(hour=0, minute=1)
             self.scheduler.add_job(
-                self._execute_capture,
+                self._recalculate_dawn_dusk_jobs,
                 trigger=trigger,
-                id=job_id,
-                args=[camera],
+                id=recalc_job_id,
+                args=[camera, schedule],
                 replace_existing=True
             )
+            job_ids.append(recalc_job_id)
+            # Also run immediately to set up today's jobs
+            self._recalculate_dawn_dusk_jobs(camera, schedule)
+            logger.info(f"Added dawn/dusk recalc job for {camera.name}: {recalc_job_id}")
+        else:
+            times = self._calculate_distributed_times(schedule.value, schedule.time_window)
 
-            job_ids.append(job_id)
-            logger.info(f"Added daily job at {capture_time} for {camera.name}: {job_id}")
+            for i, capture_time in enumerate(times):
+                job_id = f"{camera.name}_{schedule.name}_daily_{i}"
+
+                trigger = CronTrigger(
+                    hour=capture_time.hour,
+                    minute=capture_time.minute
+                )
+
+                self.scheduler.add_job(
+                    self._execute_capture,
+                    trigger=trigger,
+                    id=job_id,
+                    args=[camera],
+                    replace_existing=True
+                )
+
+                job_ids.append(job_id)
+                logger.info(f"Added daily job at {capture_time} for {camera.name}: {job_id}")
 
         return job_ids
 
@@ -226,13 +258,90 @@ class ScheduleManager:
     def _is_within_window(self, time_window: TimeWindow) -> bool:
         """Check if current time is within the time window."""
         now = datetime.now().time()
-        start = time_window.start
-        end = time_window.end
+
+        if time_window.use_dawn_dusk:
+            dawn_dusk = self._get_dawn_dusk_window()
+            if dawn_dusk:
+                start, end = dawn_dusk
+            else:
+                start = time_window.start
+                end = time_window.end
+        else:
+            start = time_window.start
+            end = time_window.end
 
         if start <= end:
             return start <= now <= end
         else:
             return now >= start or now <= end
+
+    def _get_dawn_dusk_window(self) -> Optional[tuple[time, time]]:
+        """Compute today's dawn and dusk times using astral."""
+        if not self._location:
+            logger.warning("Dawn/dusk requested but no location configured")
+            return None
+        try:
+            from astral import LocationInfo
+            from astral.sun import sun
+
+            loc = LocationInfo(
+                name="configured",
+                region="",
+                timezone="UTC",
+                latitude=self._location.latitude,
+                longitude=self._location.longitude
+            )
+            s = sun(loc.observer, date=datetime.now().date())
+            dawn = s["dawn"].time()
+            dusk = s["dusk"].time()
+            logger.debug(f"Computed dawn={dawn}, dusk={dusk}")
+            return (dawn, dusk)
+        except Exception as e:
+            logger.error(f"Failed to compute dawn/dusk: {e}")
+            return None
+
+    def _recalculate_dawn_dusk_jobs(self, camera: CameraConfig, schedule: Schedule) -> None:
+        """Recalculate distributed capture times based on today's dawn/dusk."""
+        # Remove old dynamic jobs for this schedule
+        prefix = f"{camera.name}_{schedule.name}_dd_"
+        for job in self.scheduler.get_jobs():
+            if job.id.startswith(prefix):
+                try:
+                    self.scheduler.remove_job(job.id)
+                except Exception:
+                    pass
+
+        dawn_dusk = self._get_dawn_dusk_window()
+        if dawn_dusk:
+            tw = TimeWindow(start=dawn_dusk[0], end=dawn_dusk[1])
+        elif schedule.time_window:
+            tw = schedule.time_window
+        else:
+            tw = None
+
+        times = self._calculate_distributed_times(schedule.value, tw)
+        now = datetime.now().time()
+
+        for i, capture_time in enumerate(times):
+            if capture_time < now:
+                continue  # Skip times that already passed today
+            job_id = f"{prefix}{i}"
+            trigger = CronTrigger(hour=capture_time.hour, minute=capture_time.minute)
+            self.scheduler.add_job(
+                self._execute_capture,
+                trigger=trigger,
+                id=job_id,
+                args=[camera],
+                replace_existing=True
+            )
+            logger.info(f"Dawn/dusk daily job at {capture_time} for {camera.name}: {job_id}")
+
+    def get_dawn_dusk_times(self) -> Optional[dict]:
+        """Get today's dawn and dusk times for the API."""
+        result = self._get_dawn_dusk_window()
+        if result:
+            return {"dawn": result[0].strftime("%H:%M"), "dusk": result[1].strftime("%H:%M")}
+        return None
 
     def remove_camera(self, camera_name: str) -> None:
         """Remove all schedules for a camera."""

@@ -27,6 +27,23 @@
                 </div>
             </div>
 
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="export-start-time">Start Time</label>
+                    <input type="time" id="export-start-time" value="00:00" onchange="updatePreview()">
+                </div>
+                <div class="form-group">
+                    <label for="export-end-time">End Time</label>
+                    <input type="time" id="export-end-time" value="23:59" onchange="updatePreview()">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="export-all-day" checked onchange="toggleAllDay()">
+                        All day
+                    </label>
+                </div>
+            </div>
+
             <div class="form-group">
                 <label for="export-preset">Preset</label>
                 <select id="export-preset" onchange="updatePreview()">
@@ -98,7 +115,26 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     document.getElementById('export-start').value = lastWeek.toISOString().split('T')[0];
     document.getElementById('export-end').value = today.toISOString().split('T')[0];
+
+    // Initialize time inputs state
+    toggleAllDay();
 });
+
+function toggleAllDay() {
+    const allDay = document.getElementById('export-all-day').checked;
+    const startTime = document.getElementById('export-start-time');
+    const endTime = document.getElementById('export-end-time');
+
+    startTime.disabled = allDay;
+    endTime.disabled = allDay;
+
+    if (allDay) {
+        startTime.value = '00:00';
+        endTime.value = '23:59';
+    }
+
+    updatePreview();
+}
 
 async function loadCameras() {
     try {
@@ -159,6 +195,7 @@ async function updatePreview() {
     const startDate = document.getElementById('export-start').value;
     const endDate = document.getElementById('export-end').value;
     const fps = parseInt(document.getElementById('export-fps').value);
+    const allDay = document.getElementById('export-all-day').checked;
 
     const preview = document.getElementById('export-preview');
 
@@ -167,13 +204,20 @@ async function updatePreview() {
         return;
     }
 
+    const payload = {
+        camera: camera,
+        start_date: startDate,
+        end_date: endDate,
+        fps: fps
+    };
+
+    if (!allDay) {
+        payload.start_time = document.getElementById('export-start-time').value;
+        payload.end_time = document.getElementById('export-end-time').value;
+    }
+
     try {
-        const info = await api.post('/exports/calculate', {
-            camera: camera,
-            start_date: startDate,
-            end_date: endDate,
-            fps: fps
-        });
+        const info = await api.post('/exports/calculate', payload);
 
         if (info.image_count === 0) {
             preview.innerHTML = '<p class="warning">No images found in this date range</p>';
@@ -209,6 +253,7 @@ async function createExport(event) {
     const endDate = document.getElementById('export-end').value;
     const preset = document.getElementById('export-preset').value;
     const fps = parseInt(document.getElementById('export-fps').value);
+    const allDay = document.getElementById('export-all-day').checked;
 
     const btn = document.getElementById('export-btn');
     btn.disabled = true;
@@ -216,14 +261,21 @@ async function createExport(event) {
 
     document.getElementById('progress-modal').classList.remove('hidden');
 
+    const payload = {
+        camera: camera,
+        start_date: startDate,
+        end_date: endDate,
+        preset: preset,
+        fps: fps
+    };
+
+    if (!allDay) {
+        payload.start_time = document.getElementById('export-start-time').value;
+        payload.end_time = document.getElementById('export-end-time').value;
+    }
+
     try {
-        const result = await api.post('/exports', {
-            camera: camera,
-            start_date: startDate,
-            end_date: endDate,
-            preset: preset,
-            fps: fps
-        });
+        const result = await api.post('/exports', payload);
 
         document.getElementById('progress-fill').style.width = '100%';
         document.getElementById('progress-text').textContent = 'Complete!';

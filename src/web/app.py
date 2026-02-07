@@ -4,7 +4,7 @@ import functools
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +25,7 @@ from ..scheduler import ScheduleManager
 from ..exporter import Exporter
 from ..models import (
     CameraConfig,
+    LocationConfig,
     Schedule,
     FrequencyType,
     TimeWindow,
@@ -110,6 +111,7 @@ def list_cameras():
                     'time_window': {
                         'start': s.time_window.start.strftime('%H:%M') if s.time_window else None,
                         'end': s.time_window.end.strftime('%H:%M') if s.time_window else None,
+                        'use_dawn_dusk': s.time_window.use_dawn_dusk if s.time_window else False,
                     } if s.time_window else None
                 }
                 for s in camera.schedules
@@ -142,7 +144,8 @@ def add_camera():
         if sched_data.get('time_window'):
             tw = TimeWindow(
                 start=datetime.strptime(sched_data['time_window']['start'], '%H:%M').time(),
-                end=datetime.strptime(sched_data['time_window']['end'], '%H:%M').time()
+                end=datetime.strptime(sched_data['time_window']['end'], '%H:%M').time(),
+                use_dawn_dusk=sched_data['time_window'].get('use_dawn_dusk', False)
             )
 
         schedules.append(Schedule(
@@ -195,7 +198,8 @@ def update_camera(name):
             if sched_data.get('time_window'):
                 tw = TimeWindow(
                     start=datetime.strptime(sched_data['time_window']['start'], '%H:%M').time(),
-                    end=datetime.strptime(sched_data['time_window']['end'], '%H:%M').time()
+                    end=datetime.strptime(sched_data['time_window']['end'], '%H:%M').time(),
+                    use_dawn_dusk=sched_data['time_window'].get('use_dawn_dusk', False)
                 )
 
             schedules.append(Schedule(
@@ -284,6 +288,7 @@ def list_schedules():
                 'time_window': {
                     'start': schedule.time_window.start.strftime('%H:%M') if schedule.time_window else None,
                     'end': schedule.time_window.end.strftime('%H:%M') if schedule.time_window else None,
+                    'use_dawn_dusk': schedule.time_window.use_dawn_dusk if schedule.time_window else False,
                 } if schedule.time_window else None
             })
 
@@ -400,12 +405,22 @@ def create_export():
     if data.get('fps'):
         preset.fps = data['fps']
 
+    # Parse optional time-of-day filter
+    start_time = None
+    end_time = None
+    if data.get('start_time'):
+        start_time = datetime.strptime(data['start_time'], '%H:%M').time()
+    if data.get('end_time'):
+        end_time = datetime.strptime(data['end_time'], '%H:%M').time()
+
     try:
         history = _exporter.generate_timelapse(
             camera=camera,
             start_date=start_date,
             end_date=end_date,
-            preset=preset
+            preset=preset,
+            start_time=start_time,
+            end_time=end_time
         )
 
         _config_manager.export_history.append(history)
@@ -446,7 +461,15 @@ def calculate_export():
 
     fps = data.get('fps', 30)
 
-    info = _exporter.calculate_export_info(camera, start_date, end_date, fps)
+    # Parse optional time-of-day filter
+    start_time = None
+    end_time = None
+    if data.get('start_time'):
+        start_time = datetime.strptime(data['start_time'], '%H:%M').time()
+    if data.get('end_time'):
+        end_time = datetime.strptime(data['end_time'], '%H:%M').time()
+
+    info = _exporter.calculate_export_info(camera, start_date, end_date, fps, start_time, end_time)
     return jsonify(info)
 
 
@@ -522,6 +545,56 @@ def get_logs():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@api.route('/settings/location', methods=['GET'])
+@require_auth
+def get_location():
+    """Get configured location."""
+    loc = _config_manager.app_config.location
+    if loc:
+        return jsonify({
+            'latitude': loc.latitude,
+            'longitude': loc.longitude,
+            'elevation': loc.elevation,
+            'configured': True
+        })
+    return jsonify({'configured': False})
+
+
+@api.route('/settings/location', methods=['PUT'])
+@require_auth
+def update_location():
+    """Update location configuration."""
+    data = request.json
+
+    latitude = data.get('latitude')
+    longitude = data.get('longitude')
+    elevation = data.get('elevation', 0.0)
+
+    if latitude is None or longitude is None:
+        return jsonify({'error': 'Latitude and longitude are required'}), 400
+
+    _config_manager.app_config.location = LocationConfig(
+        latitude=float(latitude),
+        longitude=float(longitude),
+        elevation=float(elevation)
+    )
+    _config_manager.save_app_config()
+    _schedule_manager.set_location(_config_manager.app_config.location)
+
+    logger.info(f"Updated location: {latitude}, {longitude}")
+    return jsonify({'success': True})
+
+
+@api.route('/sun', methods=['GET'])
+@require_auth
+def get_sun_times():
+    """Get today's dawn and dusk times."""
+    times = _schedule_manager.get_dawn_dusk_times()
+    if times:
+        return jsonify(times)
+    return jsonify({'error': 'Location not configured or calculation failed'}), 400
 
 
 # ============== Page Routes ==============

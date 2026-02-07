@@ -11,6 +11,7 @@ from .models import (
     AppConfig,
     CameraConfig,
     ExportPreset,
+    LocationConfig,
     PendingExport,
     ExportHistory,
 )
@@ -161,6 +162,38 @@ class ConfigManager:
         except Exception as e:
             raise ConfigError(f"Failed to load app config: {e}")
 
+    def save_app_config(self) -> None:
+        """Save app configuration to file."""
+        path = self.config_dir / "app.yaml"
+        data = {
+            "web_ui": {
+                "enabled": self.app_config.web_ui.enabled,
+                "host": self.app_config.web_ui.host,
+                "port": self.app_config.web_ui.port,
+                "auth_enabled": self.app_config.web_ui.auth_enabled,
+                "username": self.app_config.web_ui.username,
+                "password": self.app_config.web_ui.password,
+            },
+            "storage": {
+                "captures_path": self.app_config.storage.captures_path,
+                "exports_path": self.app_config.storage.exports_path,
+                "logs_path": self.app_config.storage.logs_path,
+                "max_log_size_mb": self.app_config.storage.max_log_size_mb,
+            },
+            "log_level": self.app_config.log_level,
+        }
+
+        if self.app_config.location:
+            data["location"] = {
+                "latitude": self.app_config.location.latitude,
+                "longitude": self.app_config.location.longitude,
+                "elevation": self.app_config.location.elevation,
+            }
+
+        with open(path, "w") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        logger.info(f"Saved app config to {path}")
+
     def load_cameras_config(self) -> dict[str, CameraConfig]:
         """Load cameras.yaml configuration."""
         path = self.config_dir / "cameras.yaml"
@@ -247,10 +280,13 @@ class ConfigManager:
                     "value": schedule.value,
                 }
                 if schedule.time_window:
-                    sched_data["time_window"] = {
+                    tw_data = {
                         "start": schedule.time_window.start.strftime("%H:%M"),
                         "end": schedule.time_window.end.strftime("%H:%M"),
                     }
+                    if schedule.time_window.use_dawn_dusk:
+                        tw_data["use_dawn_dusk"] = True
+                    sched_data["time_window"] = tw_data
                 cam_data["schedules"].append(sched_data)
 
             data["cameras"][name] = cam_data
@@ -292,7 +328,7 @@ class ConfigManager:
             })
 
         for history in self.export_history:
-            data["export_history"].append({
+            h_data = {
                 "id": history.id,
                 "camera": history.camera,
                 "start_date": history.start_date,
@@ -303,7 +339,12 @@ class ConfigManager:
                 "image_count": history.image_count,
                 "duration_seconds": history.duration_seconds,
                 "file_size_bytes": history.file_size_bytes,
-            })
+            }
+            if history.start_time:
+                h_data["start_time"] = history.start_time
+            if history.end_time:
+                h_data["end_time"] = history.end_time
+            data["export_history"].append(h_data)
 
         with open(path, "w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
