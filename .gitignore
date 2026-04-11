@@ -27,7 +27,6 @@ Thumbs.db
 # Project documentation (internal)
 spec.md
 claude.md
-requirements.txt
 
 # Config files with credentials (use .example files as templates)
 config/cameras.yaml

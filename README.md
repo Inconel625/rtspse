@@ -44,20 +44,7 @@ timezonefinder>=6.0
    cd rtspse
    ```
 
-2. Create and activate a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # Linux/macOS
-   # or
-   venv\Scripts\activate     # Windows
-   ```
-
-3. Install Python dependencies:
-   ```bash
-   pip install flask>=3.0.0 opencv-python-headless>=4.8.0 apscheduler>=3.10.0 pyyaml>=6.0 watchdog>=3.0.0 astral>=3.2 timezonefinder>=6.0
-   ```
-
-4. Install FFmpeg:
+2. Install FFmpeg:
    ```bash
    # Ubuntu/Debian
    sudo apt install ffmpeg
@@ -66,6 +53,25 @@ timezonefinder>=6.0
    brew install ffmpeg
 
    # Windows - download from https://ffmpeg.org/download.html
+   ```
+
+3. Create and activate a virtual environment:
+
+   > **Ubuntu/Debian note:** The `python3-venv` package must be installed before this step:
+   > ```bash
+   > sudo apt install python3-venv
+   > ```
+
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # Linux/macOS
+   # or
+   venv\Scripts\activate     # Windows
+   ```
+
+4. Install Python dependencies:
+   ```bash
+   pip install -r requirements.txt
    ```
 
 5. Copy and configure the example config files:
@@ -90,9 +96,9 @@ web_ui:
   password: admin       # Auth password (if enabled)
 
 storage:
-  captures_path: captures    # Where to store captured images
-  exports_path: exports      # Where to store generated videos
-  logs_path: logs           # Log file location
+  captures_path: captures    # Where to store captured images (relative to working directory)
+  exports_path: exports      # Where to store generated videos (relative to working directory)
+  logs_path: logs           # Log file location (relative to working directory)
   max_log_size_mb: 100      # Max log file size before rotation
 
 log_level: INFO             # DEBUG, INFO, WARNING, ERROR
@@ -156,6 +162,8 @@ python -m src.main
 
 Access the web interface at `http://localhost:5050`
 
+> **Note:** On first run, Flask will print a warning about running a development server. This is expected for home and local network use. For internet-facing deployments, consider running behind a reverse proxy such as nginx.
+
 ### Running Headless (No Web UI)
 
 ```bash
@@ -167,6 +175,8 @@ python -m src.main --no-web
 ```bash
 python -m src.main --config-dir /path/to/config
 ```
+
+> **Note:** Storage paths in `app.yaml` (`captures_path`, `exports_path`, `logs_path`) are relative to the working directory from which you run the application, not the config directory. When using `--config-dir`, either run the application from the desired base directory or use absolute paths in `app.yaml`.
 
 ### Signal Handling
 
@@ -205,7 +215,7 @@ The web UI exposes a REST API:
 rtspse/
 ├── config/
 │   ├── app.yaml              # Application settings
-│   ├── cameras.yaml          # Camera definitions
+│   ├── cameras.yaml          # Camera definitions (copy from cameras.yaml.example)
 │   └── exports.yaml          # Export presets and history
 ├── captures/                 # Stored images
 │   └── {camera-name}/
