@@ -1,7 +1,7 @@
 """Data models for RTSP Timelapse Generator."""
 
 from dataclasses import dataclass, field
-from datetime import time
+from datetime import date, datetime, time
 from typing import Optional
 from enum import Enum
 
@@ -57,7 +57,6 @@ class Schedule:
 class CaptureSettings:
     """Settings for image capture."""
     jpeg_quality: int = 90
-    resolution_scale: Optional[float] = None  # None means original resolution
     timeout_seconds: int = 10
     retry_count: int = 3
     retry_delay_seconds: float = 1.0
@@ -79,7 +78,6 @@ class CameraConfig:
         capture_data = data.get("capture_settings", {})
         capture_settings = CaptureSettings(
             jpeg_quality=capture_data.get("jpeg_quality", 90),
-            resolution_scale=capture_data.get("resolution_scale"),
             timeout_seconds=capture_data.get("timeout_seconds", 10),
             retry_count=capture_data.get("retry_count", 3),
             retry_delay_seconds=capture_data.get("retry_delay_seconds", 1.0)
@@ -123,7 +121,7 @@ class WebUIConfig:
     """Web UI configuration."""
     enabled: bool = True
     host: str = "0.0.0.0"
-    port: int = 5000
+    port: int = 5050
     auth_enabled: bool = False
     username: str = "admin"
     password: str = "admin"
@@ -172,7 +170,7 @@ class AppConfig:
         web_ui = WebUIConfig(
             enabled=web_ui_data.get("enabled", True),
             host=web_ui_data.get("host", "0.0.0.0"),
-            port=web_ui_data.get("port", 5000),
+            port=web_ui_data.get("port", 5050),
             auth_enabled=web_ui_data.get("auth_enabled", False),
             username=web_ui_data.get("username", "admin"),
             password=web_ui_data.get("password", "admin")
@@ -201,10 +199,11 @@ class PendingExport:
     """Pending export job."""
     id: str
     camera: str
-    start_date: str
-    end_date: str
+    start_date: date
+    end_date: date
     preset: str = "standard"
-    auto_generate: bool = False
+    # start_time/end_time stored as "HH:MM" strings (or None); kept as str
+    # because the special value "dawn/dusk" is also valid here.
     start_time: Optional[str] = None
     end_time: Optional[str] = None
 
@@ -213,10 +212,9 @@ class PendingExport:
         return cls(
             id=data.get("id", ""),
             camera=data.get("camera", ""),
-            start_date=data.get("start_date", ""),
-            end_date=data.get("end_date", ""),
+            start_date=date.fromisoformat(data.get("start_date", "")),
+            end_date=date.fromisoformat(data.get("end_date", "")),
             preset=data.get("preset", "standard"),
-            auto_generate=data.get("auto_generate", False),
             start_time=data.get("start_time"),
             end_time=data.get("end_time")
         )
@@ -227,27 +225,31 @@ class ExportHistory:
     """Export history entry."""
     id: str
     camera: str
-    start_date: str
-    end_date: str
+    start_date: date
+    end_date: date
     preset: str
     output_file: str
-    created_at: str
+    created_at: datetime
     image_count: int
     duration_seconds: float
     file_size_bytes: int
+    # start_time/end_time stored as "HH:MM" strings (or "dawn/dusk", or None).
     start_time: Optional[str] = None
     end_time: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "ExportHistory":
+        created_raw = data.get("created_at", "1970-01-01T00:00:00")
+        # Strip trailing Z so fromisoformat works on both naive and Z-suffixed strings
+        created_at = datetime.fromisoformat(created_raw.rstrip("Z"))
         return cls(
             id=data.get("id", ""),
             camera=data.get("camera", ""),
-            start_date=data.get("start_date", ""),
-            end_date=data.get("end_date", ""),
+            start_date=date.fromisoformat(data.get("start_date", "")),
+            end_date=date.fromisoformat(data.get("end_date", "")),
             preset=data.get("preset", ""),
             output_file=data.get("output_file", ""),
-            created_at=data.get("created_at", ""),
+            created_at=created_at,
             image_count=data.get("image_count", 0),
             duration_seconds=data.get("duration_seconds", 0.0),
             file_size_bytes=data.get("file_size_bytes", 0),
