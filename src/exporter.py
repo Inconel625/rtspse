@@ -137,11 +137,11 @@ class Exporter:
             history = ExportHistory(
                 id=export_id,
                 camera=camera,
-                start_date=start_date.strftime("%Y-%m-%d"),
-                end_date=end_date.strftime("%Y-%m-%d"),
+                start_date=start_date.date(),
+                end_date=end_date.date(),
                 preset=preset.name,
                 output_file=output_name,
-                created_at=datetime.now().isoformat(),
+                created_at=datetime.now(),
                 image_count=len(images),
                 duration_seconds=duration,
                 file_size_bytes=file_size,
@@ -347,7 +347,7 @@ class Exporter:
             exports.append({
                 "filename": export_file.name,
                 "size_bytes": stat.st_size,
-                "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat() + "Z"
             })
 
         exports.sort(key=lambda x: x["created_at"], reverse=True)
