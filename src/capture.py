@@ -8,7 +8,7 @@ from typing import Optional
 
 import cv2
 
-from .models import CameraConfig, CaptureSettings
+from .models import CameraConfig
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +81,6 @@ class CaptureManager:
             ret, frame = cap.read()
             if not ret or frame is None:
                 raise CaptureError("Failed to read frame from stream")
-
-            if settings.resolution_scale and settings.resolution_scale != 1.0:
-                width = int(frame.shape[1] * settings.resolution_scale)
-                height = int(frame.shape[0] * settings.resolution_scale)
-                frame = cv2.resize(frame, (width, height))
 
             output_path = self._get_output_path(camera.name)
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, settings.jpeg_quality]
