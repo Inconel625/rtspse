@@ -1,33 +1,54 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- Background circle -->
-  <circle cx="32" cy="32" r="30" fill="#1a1a2e"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e3a8a"/>
+      <stop offset="100%" stop-color="#0c1445"/>
+    </linearGradient>
+    <radialGradient id="lens-fill" cx="38%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#1e40af"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Rounded-square app icon background -->
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
 
   <!-- Camera body -->
-  <rect x="14" y="24" width="28" height="20" rx="3" fill="#4a90d9"/>
+  <rect x="9" y="22" width="46" height="28" rx="5" fill="#1e3a8a" opacity="0.55"/>
+  <!-- Viewfinder bump -->
+  <rect x="24" y="16" width="12" height="8" rx="3" fill="#1e3a8a" opacity="0.55"/>
 
-  <!-- Camera lens -->
-  <circle cx="28" cy="34" r="8" fill="#1a1a2e"/>
-  <circle cx="28" cy="34" r="5" fill="#2d5a87"/>
-  <circle cx="28" cy="34" r="2" fill="#1a1a2e"/>
+  <!-- Lens bezel -->
+  <circle cx="32" cy="36" r="13.5" fill="#0c1445"/>
+  <circle cx="32" cy="36" r="12.5" fill="none" stroke="#3b82f6" stroke-width="1.5" opacity="0.7"/>
 
-  <!-- Camera flash/detail -->
-  <rect x="38" y="27" width="3" height="3" rx="0.5" fill="#f39c12"/>
+  <!-- Lens glass -->
+  <circle cx="32" cy="36" r="10" fill="url(#lens-fill)"/>
 
-  <!-- Clock overlay (timelapse indicator) -->
-  <circle cx="46" cy="20" r="10" fill="#16213e" stroke="#4a90d9" stroke-width="2"/>
-  <circle cx="46" cy="20" r="7" fill="#1a1a2e"/>
+  <!-- Aperture iris — 3 blades -->
+  <g opacity="0.9">
+    <path d="M32,36 L32,26 A10,10,0,0,1,41,43 Z" fill="#1d4ed8"/>
+    <path d="M32,36 L41,43 A10,10,0,0,1,23,43 Z" fill="#2563eb"/>
+    <path d="M32,36 L23,43 A10,10,0,0,1,32,26 Z" fill="#1d4ed8"/>
+  </g>
 
-  <!-- Clock hands -->
-  <line x1="46" y1="20" x2="46" y2="15" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/>
-  <line x1="46" y1="20" x2="50" y2="20" stroke="#f39c12" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- Aperture centre hole -->
+  <circle cx="32" cy="36" r="4" fill="#0c1445"/>
+  <!-- Centre catch-light -->
+  <circle cx="32" cy="36" r="1.8" fill="#93c5fd"/>
 
-  <!-- Clock center dot -->
-  <circle cx="46" cy="20" r="1.5" fill="#f39c12"/>
+  <!-- Lens highlight -->
+  <circle cx="27.5" cy="31.5" r="2.2" fill="white" opacity="0.12"/>
+  <circle cx="27" cy="31" r="0.9" fill="white" opacity="0.25"/>
 
-  <!-- Film strip marks (timelapse frames) -->
-  <rect x="14" y="46" width="4" height="3" rx="0.5" fill="#4a90d9" opacity="0.6"/>
-  <rect x="20" y="46" width="4" height="3" rx="0.5" fill="#4a90d9" opacity="0.7"/>
-  <rect x="26" y="46" width="4" height="3" rx="0.5" fill="#4a90d9" opacity="0.8"/>
-  <rect x="32" y="46" width="4" height="3" rx="0.5" fill="#4a90d9" opacity="0.9"/>
-  <rect x="38" y="46" width="4" height="3" rx="0.5" fill="#4a90d9"/>
+  <!-- Timelapse sweep arc (amber) — quarter-circle outside the lens -->
+  <path d="M 32 22.5 A 13.5 13.5 0 0 1 45.5 36"
+        stroke="#f59e0b" stroke-width="3" fill="none"
+        stroke-linecap="round"/>
+  <!-- Arrowhead at arc end -->
+  <polygon points="44,32.5 47.5,35.5 43.5,38" fill="#f59e0b"/>
+
+  <!-- REC indicator dot -->
+  <circle cx="50" cy="26" r="3" fill="#ef4444"/>
+  <circle cx="50" cy="26" r="1.5" fill="#fca5a5"/>
 </svg>
