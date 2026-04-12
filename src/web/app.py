@@ -89,7 +89,7 @@ def list_cameras():
                 filename = captures[-1].stem
                 date_str = "_".join(filename.split("_")[1:])
                 capture_time = datetime.strptime(date_str, "%Y-%m-%d_%H-%M-%S")
-                last_capture_time = capture_time.isoformat()
+                last_capture_time = capture_time.isoformat() + 'Z'
             except ValueError:
                 pass
 
@@ -322,7 +322,7 @@ def list_captures():
                 captures.append({
                     'camera': camera,
                     'path': str(path.relative_to(_capture_manager.captures_path)),
-                    'timestamp': capture_time.isoformat(),
+                    'timestamp': capture_time.isoformat() + 'Z',
                     'filename': path.name
                 })
             except ValueError:

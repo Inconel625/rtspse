@@ -204,7 +204,7 @@ class CaptureManager:
                     all_captures.append({
                         "camera": camera_name,
                         "path": str(img_path.relative_to(self.captures_path)),
-                        "timestamp": capture_time.isoformat(),
+                        "timestamp": capture_time.isoformat() + 'Z',
                         "filename": img_path.name
                     })
                 except ValueError:
