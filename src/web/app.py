@@ -1,6 +1,8 @@
 """Flask web application for RTSP Timelapse Generator."""
 
+import copy
 import functools
+import hmac
 import logging
 import os
 import uuid
@@ -22,7 +24,7 @@ from flask import (
 from ..config import ConfigManager
 from ..capture import CaptureManager
 from ..scheduler import ScheduleManager
-from ..exporter import Exporter
+from ..exporter import Exporter, ExportError
 from ..models import (
     CameraConfig,
     LocationConfig,
@@ -45,6 +47,29 @@ api = Blueprint('api', __name__, url_prefix='/api')
 pages = Blueprint('pages', __name__)
 
 
+# ============== Helpers ==============
+
+def _is_safe_path(base: Path, target: Path) -> bool:
+    """Return True if target resolves inside base (prevents path traversal)."""
+    return str(target.resolve()).startswith(str(base.resolve()))
+
+
+def _schedule_to_dict(s: Schedule) -> dict:
+    """Serialise a Schedule to a JSON-friendly dict."""
+    return {
+        'name': s.name,
+        'frequency': s.frequency.value,
+        'enabled': s.enabled,
+        'value': s.value,
+        'interval_unit': s.interval_unit,
+        'time_window': {
+            'start': s.time_window.start.strftime('%H:%M'),
+            'end': s.time_window.end.strftime('%H:%M'),
+            'use_dawn_dusk': s.time_window.use_dawn_dusk,
+        } if s.time_window else None
+    }
+
+
 def require_auth(f):
     """Decorator for basic auth if enabled."""
     @functools.wraps(f)
@@ -61,7 +86,10 @@ def require_auth(f):
             expected_user = _config_manager.app_config.web_ui.username
             expected_pass = _config_manager.app_config.web_ui.password
 
-            if auth.username != expected_user or auth.password != expected_pass:
+            # Use constant-time comparison to prevent timing attacks
+            user_ok = hmac.compare_digest(auth.username, expected_user)
+            pass_ok = hmac.compare_digest(auth.password, expected_pass)
+            if not (user_ok and pass_ok):
                 return Response('Invalid credentials', 401)
 
         return f(*args, **kwargs)
@@ -102,21 +130,7 @@ def list_cameras():
             'last_capture': last_capture,
             'last_capture_path': last_capture_path,
             'last_capture_time': last_capture_time,
-            'schedules': [
-                {
-                    'name': s.name,
-                    'frequency': s.frequency.value,
-                    'enabled': s.enabled,
-                    'value': s.value,
-                    'interval_unit': s.interval_unit,
-                    'time_window': {
-                        'start': s.time_window.start.strftime('%H:%M') if s.time_window else None,
-                        'end': s.time_window.end.strftime('%H:%M') if s.time_window else None,
-                        'use_dawn_dusk': s.time_window.use_dawn_dusk if s.time_window else False,
-                    } if s.time_window else None
-                }
-                for s in camera.schedules
-            ]
+            'schedules': [_schedule_to_dict(s) for s in camera.schedules]
         })
 
     return jsonify(cameras)
@@ -131,6 +145,9 @@ def add_camera():
     name = data.get('name', '').strip()
     if not name:
         return jsonify({'error': 'Camera name is required'}), 400
+
+    if '_' in name:
+        return jsonify({'error': 'Camera name may not contain underscores'}), 400
 
     if name in _config_manager.cameras:
         return jsonify({'error': 'Camera already exists'}), 400
@@ -282,19 +299,9 @@ def list_schedules():
 
     for camera_name, camera in _config_manager.cameras.items():
         for schedule in camera.schedules:
-            schedules.append({
-                'camera': camera_name,
-                'name': schedule.name,
-                'frequency': schedule.frequency.value,
-                'enabled': schedule.enabled,
-                'value': schedule.value,
-                'interval_unit': schedule.interval_unit,
-                'time_window': {
-                    'start': schedule.time_window.start.strftime('%H:%M') if schedule.time_window else None,
-                    'end': schedule.time_window.end.strftime('%H:%M') if schedule.time_window else None,
-                    'use_dawn_dusk': schedule.time_window.use_dawn_dusk if schedule.time_window else False,
-                } if schedule.time_window else None
-            })
+            entry = _schedule_to_dict(schedule)
+            entry['camera'] = camera_name
+            schedules.append(entry)
 
     next_runs = _schedule_manager.get_next_run_times()
 
@@ -341,7 +348,7 @@ def serve_capture(capture_path):
     """Serve a capture image."""
     full_path = _capture_manager.captures_path / capture_path
 
-    if not str(full_path.resolve()).startswith(str(_capture_manager.captures_path.resolve())):
+    if not _is_safe_path(_capture_manager.captures_path, full_path):
         abort(403)
 
     if not full_path.exists():
@@ -360,14 +367,16 @@ def list_exports():
             {
                 'id': h.id,
                 'camera': h.camera,
-                'start_date': h.start_date,
-                'end_date': h.end_date,
+                'start_date': h.start_date.isoformat(),
+                'end_date': h.end_date.isoformat(),
                 'preset': h.preset,
                 'output_file': h.output_file,
-                'created_at': h.created_at,
+                'created_at': h.created_at.isoformat() + 'Z',
                 'image_count': h.image_count,
                 'duration_seconds': h.duration_seconds,
-                'file_size_bytes': h.file_size_bytes
+                'file_size_bytes': h.file_size_bytes,
+                'start_time': h.start_time,
+                'end_time': h.end_time,
             }
             for h in _config_manager.export_history
         ],
@@ -404,10 +413,14 @@ def create_export():
     if preset_name not in _config_manager.export_presets:
         return jsonify({'error': 'Invalid preset'}), 400
 
-    preset = _config_manager.export_presets[preset_name]
+    # Work on a copy so the shared preset object is never mutated
+    preset = copy.copy(_config_manager.export_presets[preset_name])
 
-    if data.get('fps'):
-        preset.fps = data['fps']
+    fps = data.get('fps')
+    if fps is not None:
+        if not isinstance(fps, int) or fps <= 0:
+            return jsonify({'error': 'fps must be a positive integer'}), 400
+        preset.fps = fps
 
     # Parse optional time-of-day filter
     start_time = None
@@ -494,7 +507,7 @@ def download_export(filename):
     """Download an export file."""
     export_path = _exporter.exports_path / filename
 
-    if not str(export_path.resolve()).startswith(str(_exporter.exports_path.resolve())):
+    if not _is_safe_path(_exporter.exports_path, export_path):
         abort(403)
 
     if not export_path.exists():
@@ -509,7 +522,7 @@ def stream_export(filename):
     """Stream an export file for in-browser playback."""
     export_path = _exporter.exports_path / filename
 
-    if not str(export_path.resolve()).startswith(str(_exporter.exports_path.resolve())):
+    if not _is_safe_path(_exporter.exports_path, export_path):
         abort(403)
 
     if not export_path.exists():
@@ -521,10 +534,23 @@ def stream_export(filename):
 @api.route('/exports/<filename>', methods=['DELETE'])
 @require_auth
 def delete_export(filename):
-    """Delete an export file."""
-    if _exporter.delete_export(filename):
-        return jsonify({'success': True})
-    return jsonify({'error': 'Export not found'}), 404
+    """Delete an export file and its history entry."""
+    try:
+        found = _exporter.delete_export(filename)
+    except ExportError:
+        abort(403)
+
+    if not found:
+        return jsonify({'error': 'Export not found'}), 404
+
+    # Remove matching history entry so the UI doesn't show a broken link
+    _config_manager.export_history = [
+        h for h in _config_manager.export_history
+        if h.output_file != filename
+    ]
+    _config_manager.save_exports_config()
+
+    return jsonify({'success': True})
 
 
 @api.route('/storage', methods=['GET'])
@@ -596,6 +622,8 @@ def update_location():
         longitude=float(longitude),
         elevation=float(elevation)
     )
+    # Detect timezone explicitly before saving so save_app_config() has no side effects
+    _config_manager.auto_detect_timezone()
     _config_manager.save_app_config()
     _schedule_manager.set_location(_config_manager.app_config.location)
 
@@ -665,10 +693,24 @@ def create_app(
         static_folder=Path(__file__).parent / 'static'
     )
 
-    app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))
+    # Persist the secret key so restarts don't invalidate sessions
+    secret_key_file = config_manager.config_dir / '.secret_key'
+    if secret_key_file.exists():
+        secret_key = secret_key_file.read_bytes()
+    else:
+        secret_key = os.urandom(24)
+        secret_key_file.write_bytes(secret_key)
+    app.secret_key = os.environ.get('SECRET_KEY', secret_key)
 
     app.register_blueprint(api)
     app.register_blueprint(pages)
+
+    # Inject configured timezone into every template so JS can read it
+    # synchronously from a <meta> tag without an async API call.
+    @app.context_processor
+    def inject_timezone():
+        loc = _config_manager.app_config.location if _config_manager else None
+        return {'timezone': loc.timezone if loc and loc.timezone else ''}
 
     @app.errorhandler(404)
     def not_found(e):

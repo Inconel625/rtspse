@@ -31,3 +31,4 @@ review.md
 
 # Config files with credentials (use .example files as templates)
 config/cameras.yaml
+config/.secret_key
