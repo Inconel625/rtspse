@@ -6,6 +6,13 @@
     <title>{% block title %}RTSPSE{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script>
+        (function() {
+            if (localStorage.getItem('theme') === 'dark') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
 </head>
 <body>
     <nav class="navbar">
@@ -16,6 +23,9 @@
             <li><a href="{{ url_for('pages.exports_page') }}" class="{% if request.endpoint == 'pages.exports_page' %}active{% endif %}">Exports</a></li>
             <li><a href="{{ url_for('pages.settings_page') }}" class="{% if request.endpoint == 'pages.settings_page' %}active{% endif %}">Settings</a></li>
         </ul>
+        <button class="dark-mode-toggle" id="darkModeToggle" title="Toggle dark mode" aria-label="Toggle dark mode">
+            <span id="darkModeIcon">🌙</span>
+        </button>
     </nav>
 
     <main class="container">

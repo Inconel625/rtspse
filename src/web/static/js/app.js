@@ -224,6 +224,33 @@ function throttle(func, limit) {
     };
 }
 
+// Dark mode
+function initDarkMode() {
+    const toggle = document.getElementById('darkModeToggle');
+    const icon = document.getElementById('darkModeIcon');
+    if (!toggle) return;
+
+    function applyTheme(dark) {
+        if (dark) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+            icon.textContent = '☀️';
+        } else {
+            document.documentElement.removeAttribute('data-theme');
+            icon.textContent = '🌙';
+        }
+    }
+
+    // Sync icon with current state (theme already applied by inline script)
+    applyTheme(document.documentElement.getAttribute('data-theme') === 'dark');
+
+    toggle.addEventListener('click', function() {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        const next = !isDark;
+        applyTheme(next);
+        localStorage.setItem('theme', next ? 'dark' : 'light');
+    });
+}
+
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', function() {
     // Add active nav highlighting
@@ -243,6 +270,8 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         })
         .catch(() => {});
+
+    initDarkMode();
 });
 
 // Export API for use in templates
