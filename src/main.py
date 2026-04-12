@@ -11,7 +11,7 @@ from logging.handlers import RotatingFileHandler
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from .config import get_config, reload_config, ConfigManager
+from .config import get_config, reload_config, set_config, ConfigManager
 from .capture import CaptureManager
 from .scheduler import ScheduleManager
 from .exporter import Exporter
@@ -156,6 +156,9 @@ def main() -> int:
             from .config import ConfigManager as CM
             config_manager = CM(Path(args.config_dir))
             config_manager.load_all()
+            # Register as global so reload_config() and get_config() use the
+            # same instance and the same config directory.
+            set_config(config_manager)
         else:
             config_manager = get_config()
 
@@ -190,6 +193,7 @@ def main() -> int:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGHUP, lambda s, f: handle_config_reload())
 
+        flask_thread = None
         web_enabled = config_manager.app_config.web_ui.enabled and not args.no_web
 
         if web_enabled:
@@ -216,7 +220,8 @@ def main() -> int:
                     threaded=True
                 )
 
-            flask_thread = threading.Thread(target=run_flask, daemon=True)
+            # Not daemon so in-flight requests can finish before the process exits
+            flask_thread = threading.Thread(target=run_flask)
             flask_thread.start()
 
         logger.info("Application started. Press Ctrl+C to stop.")
@@ -240,6 +245,9 @@ def main() -> int:
 
         if schedule_manager:
             schedule_manager.stop()
+
+        if flask_thread and flask_thread.is_alive():
+            flask_thread.join(timeout=5)
 
         logger.info("Shutdown complete")
 
