@@ -66,8 +66,11 @@ function formatDuration(seconds) {
     }
 }
 
-// Configured timezone from server (null = browser default)
-let _configuredTimezone = null;
+// Configured timezone from the server-injected meta tag (null = browser default).
+// Read synchronously so timestamps are formatted correctly on first render,
+// with no async race against an API call.
+const _tzMeta = document.querySelector('meta[name="timezone"]');
+const _configuredTimezone = (_tzMeta && _tzMeta.content) ? _tzMeta.content : null;
 
 function formatTime(isoString) {
     if (!isoString) return '';
@@ -84,8 +87,13 @@ function formatDateTime(isoString) {
 }
 
 function formatDate(isoString) {
+    if (!isoString) return '';
     const date = new Date(isoString);
-    return date.toLocaleDateString();
+    const opts = {};
+    if (_configuredTimezone) {
+        opts.timeZone = _configuredTimezone;
+    }
+    return date.toLocaleDateString(undefined, opts);
 }
 
 // Show notification
@@ -260,16 +268,6 @@ document.addEventListener('DOMContentLoaded', function() {
             link.classList.add('active');
         }
     });
-
-    // Fetch configured timezone
-    fetch('/api/settings/location')
-        .then(r => r.json())
-        .then(data => {
-            if (data.configured && data.timezone) {
-                _configuredTimezone = data.timezone;
-            }
-        })
-        .catch(() => {});
 
     initDarkMode();
 });
