@@ -94,30 +94,18 @@ class ScheduleManager:
         """Create hourly capture job."""
         job_id = f"{camera.name}_{schedule.name}_hourly"
 
-        trigger_kwargs = {"minute": 0}
-
-        if schedule.time_window and schedule.time_window.use_dawn_dusk:
-            # Fire every hour, check dawn/dusk at runtime
-            trigger = CronTrigger(**trigger_kwargs)
-            self.scheduler.add_job(
-                self._execute_capture_with_window_check,
-                trigger=trigger,
-                id=job_id,
-                args=[camera, schedule.time_window],
-                replace_existing=True
-            )
-        else:
-            if schedule.time_window:
-                trigger_kwargs["hour"] = self._get_hour_range(schedule.time_window)
-
-            trigger = CronTrigger(**trigger_kwargs)
-            self.scheduler.add_job(
-                self._execute_capture,
-                trigger=trigger,
-                id=job_id,
-                args=[camera],
-                replace_existing=True
-            )
+        # Always fire at :00 of every hour and let _execute_capture_with_window_check
+        # enforce the exact window boundaries at runtime.  Using _get_hour_range in the
+        # cron trigger would discard sub-hour minute boundaries (e.g. 06:30 treated as
+        # 06:00), and mixing trigger-level and runtime filtering is confusing.
+        trigger = CronTrigger(minute=0)
+        self.scheduler.add_job(
+            self._execute_capture_with_window_check,
+            trigger=trigger,
+            id=job_id,
+            args=[camera, schedule.time_window],
+            replace_existing=True
+        )
 
         logger.info(f"Added hourly job for {camera.name}: {job_id}")
         return job_id
@@ -225,16 +213,6 @@ class ScheduleManager:
 
         return times
 
-    def _get_hour_range(self, time_window: TimeWindow) -> str:
-        """Convert time window to cron hour range."""
-        start_hour = time_window.start.hour
-        end_hour = time_window.end.hour
-
-        if end_hour < start_hour:
-            return f"{start_hour}-23,0-{end_hour}"
-
-        return f"{start_hour}-{end_hour}"
-
     def _execute_capture(self, camera: CameraConfig) -> None:
         """Execute capture for a camera."""
         if self._capture_callback:
@@ -312,14 +290,21 @@ class ScheduleManager:
 
     def _recalculate_dawn_dusk_jobs(self, camera: CameraConfig, schedule: Schedule) -> None:
         """Recalculate distributed capture times based on today's dawn/dusk."""
-        # Remove old dynamic jobs for this schedule
         prefix = f"{camera.name}_{schedule.name}_dd_"
+
+        # Remove old dynamic jobs for this schedule from both the scheduler and
+        # _job_ids so that remove_camera / update_camera stay consistent.
         for job in self.scheduler.get_jobs():
             if job.id.startswith(prefix):
                 try:
                     self.scheduler.remove_job(job.id)
                 except Exception:
                     pass
+        if camera.name in self._job_ids:
+            self._job_ids[camera.name] = [
+                jid for jid in self._job_ids[camera.name]
+                if not jid.startswith(prefix)
+            ]
 
         dawn_dusk = self._get_dawn_dusk_window()
         if dawn_dusk:
@@ -344,6 +329,9 @@ class ScheduleManager:
                 args=[camera],
                 replace_existing=True
             )
+            # Track the _dd_ job ID so remove_camera/update_camera can clean it up
+            if camera.name in self._job_ids:
+                self._job_ids[camera.name].append(job_id)
             logger.info(f"Dawn/dusk daily job at {capture_time} for {camera.name}: {job_id}")
 
     def get_dawn_dusk_times(self) -> Optional[dict]:
@@ -373,26 +361,6 @@ class ScheduleManager:
         self._cameras[camera.name] = camera
         if camera.enabled:
             self._add_camera_schedules(camera)
-
-    def pause_camera(self, camera_name: str) -> None:
-        """Pause all jobs for a camera."""
-        if camera_name in self._job_ids:
-            for job_id in self._job_ids[camera_name]:
-                try:
-                    self.scheduler.pause_job(job_id)
-                except Exception:
-                    pass
-            logger.info(f"Paused all jobs for {camera_name}")
-
-    def resume_camera(self, camera_name: str) -> None:
-        """Resume all jobs for a camera."""
-        if camera_name in self._job_ids:
-            for job_id in self._job_ids[camera_name]:
-                try:
-                    self.scheduler.resume_job(job_id)
-                except Exception:
-                    pass
-            logger.info(f"Resumed all jobs for {camera_name}")
 
     def get_next_run_times(self) -> dict[str, list[dict]]:
         """Get next run times for all cameras."""
