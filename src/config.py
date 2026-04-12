@@ -1,7 +1,6 @@
 """Configuration loading and validation for RTSP Timelapse Generator."""
 
 import logging
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -75,7 +74,7 @@ class ConfigManager:
             "web_ui": {
                 "enabled": True,
                 "host": "0.0.0.0",
-                "port": 5000,
+                "port": 5050,
                 "auth_enabled": False,
                 "username": "admin",
                 "password": "admin"
@@ -96,12 +95,12 @@ class ConfigManager:
         """Write default cameras configuration."""
         default = {
             "cameras": {
-                "example_camera": {
+                "example-camera": {
                     "url": "rtsp://example.com/stream",
                     "enabled": False,
                     "schedules": [
                         {
-                            "name": "hourly_daytime",
+                            "name": "hourly-daytime",
                             "frequency": "hourly",
                             "enabled": True,
                             "time_window": {
@@ -173,6 +172,28 @@ class ConfigManager:
         except Exception as e:
             raise ConfigError(f"Failed to load app config: {e}")
 
+    def auto_detect_timezone(self) -> Optional[str]:
+        """
+        Detect timezone from the configured location coordinates.
+
+        Returns the detected timezone string, or None if unavailable.
+        Sets app_config.location.timezone if detection succeeds and no
+        timezone is already configured.
+        """
+        loc = self.app_config.location
+        if not loc or loc.timezone:
+            return loc.timezone if loc else None
+        try:
+            tf = _get_timezone_finder()
+            tz = tf.timezone_at(lat=loc.latitude, lng=loc.longitude)
+            if tz:
+                loc.timezone = tz
+                logger.info(f"Auto-detected timezone: {tz}")
+            return tz
+        except Exception as e:
+            logger.warning(f"Failed to detect timezone: {e}")
+            return None
+
     def save_app_config(self) -> None:
         """Save app configuration to file."""
         path = self.config_dir / "app.yaml"
@@ -196,15 +217,6 @@ class ConfigManager:
 
         if self.app_config.location:
             loc = self.app_config.location
-            if not loc.timezone:
-                try:
-                    tf = _get_timezone_finder()
-                    tz = tf.timezone_at(lat=loc.latitude, lng=loc.longitude)
-                    if tz:
-                        loc.timezone = tz
-                        logger.info(f"Auto-detected timezone: {tz}")
-                except Exception as e:
-                    logger.warning(f"Failed to detect timezone: {e}")
             data["location"] = {
                 "latitude": loc.latitude,
                 "longitude": loc.longitude,
@@ -291,9 +303,6 @@ class ConfigManager:
                 }
             }
 
-            if camera.capture_settings.resolution_scale:
-                cam_data["capture_settings"]["resolution_scale"] = camera.capture_settings.resolution_scale
-
             for schedule in camera.schedules:
                 sched_data = {
                     "name": schedule.name,
@@ -341,24 +350,28 @@ class ConfigManager:
             data["presets"][name] = preset_data
 
         for pending in self.pending_exports:
-            data["pending_exports"].append({
+            p_data = {
                 "id": pending.id,
                 "camera": pending.camera,
-                "start_date": pending.start_date,
-                "end_date": pending.end_date,
+                "start_date": pending.start_date.isoformat(),
+                "end_date": pending.end_date.isoformat(),
                 "preset": pending.preset,
-                "auto_generate": pending.auto_generate,
-            })
+            }
+            if pending.start_time:
+                p_data["start_time"] = pending.start_time
+            if pending.end_time:
+                p_data["end_time"] = pending.end_time
+            data["pending_exports"].append(p_data)
 
         for history in self.export_history:
             h_data = {
                 "id": history.id,
                 "camera": history.camera,
-                "start_date": history.start_date,
-                "end_date": history.end_date,
+                "start_date": history.start_date.isoformat(),
+                "end_date": history.end_date.isoformat(),
                 "preset": history.preset,
                 "output_file": history.output_file,
-                "created_at": history.created_at,
+                "created_at": history.created_at.isoformat() + "Z",
                 "image_count": history.image_count,
                 "duration_seconds": history.duration_seconds,
                 "file_size_bytes": history.file_size_bytes,
@@ -375,18 +388,18 @@ class ConfigManager:
 
     def get_captures_path(self) -> Path:
         """Get the captures directory path."""
-        base = Path(__file__).parent.parent
-        return base / self.app_config.storage.captures_path
+        p = Path(self.app_config.storage.captures_path)
+        return p if p.is_absolute() else Path.cwd() / p
 
     def get_exports_path(self) -> Path:
         """Get the exports directory path."""
-        base = Path(__file__).parent.parent
-        return base / self.app_config.storage.exports_path
+        p = Path(self.app_config.storage.exports_path)
+        return p if p.is_absolute() else Path.cwd() / p
 
     def get_logs_path(self) -> Path:
         """Get the logs directory path."""
-        base = Path(__file__).parent.parent
-        return base / self.app_config.storage.logs_path
+        p = Path(self.app_config.storage.logs_path)
+        return p if p.is_absolute() else Path.cwd() / p
 
 
 # Global config instance
@@ -400,6 +413,12 @@ def get_config() -> ConfigManager:
         _config_manager = ConfigManager()
         _config_manager.load_all()
     return _config_manager
+
+
+def set_config(manager: ConfigManager) -> None:
+    """Register a pre-built ConfigManager as the global instance."""
+    global _config_manager
+    _config_manager = manager
 
 
 def reload_config() -> ConfigManager:
