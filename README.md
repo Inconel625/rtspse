@@ -178,6 +178,54 @@ python -m src.main --config-dir /path/to/config
 
 > **Note:** Storage paths in `app.yaml` (`captures_path`, `exports_path`, `logs_path`) are relative to the working directory from which you run the application, not the config directory. When using `--config-dir`, either run the application from the desired base directory or use absolute paths in `app.yaml`.
 
+### Running as a systemd Service (Linux)
+
+To run the application automatically on boot, create a systemd unit file:
+
+```bash
+sudo nano /etc/systemd/system/rtspse.service
+```
+
+```ini
+[Unit]
+Description=RTSP Timelapse Generator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/rtspse
+ExecStart=/opt/rtspse/venv/bin/python -m src.main
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> **Note:** Adjust `WorkingDirectory` and `ExecStart` to match your actual install path and virtual environment location.
+
+Then enable and start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable rtspse
+sudo systemctl start rtspse
+```
+
+Check status and logs:
+
+```bash
+sudo systemctl status rtspse
+sudo journalctl -u rtspse -f
+```
+
+To reload configuration without restarting:
+
+```bash
+sudo systemctl kill -s HUP rtspse
+```
+
 ### Signal Handling
 
 - `SIGTERM` / `SIGINT` (Ctrl+C) - Graceful shutdown

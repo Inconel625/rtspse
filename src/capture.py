@@ -8,7 +8,7 @@ from typing import Optional
 
 import cv2
 
-from .models import CameraConfig
+from .models import CameraConfig, CaptureSettings
 
 logger = logging.getLogger(__name__)
 
