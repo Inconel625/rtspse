@@ -40,7 +40,7 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     loadDashboard();
-    setInterval(loadDashboard, 30000);
+    startAutoRefresh(loadDashboard, 30000);
 });
 
 async function loadDashboard() {
@@ -65,13 +65,15 @@ async function loadCamerasStatus() {
         const html = cameras.map(cam => `
             <div class="status-item">
                 <span class="status-indicator ${cam.enabled ? 'online' : 'offline'}"></span>
-                <span class="status-name">${cam.name}</span>
+                <span class="status-name">${escapeHtml(cam.name)}</span>
                 <span class="status-detail">${cam.capture_count} captures</span>
             </div>
         `).join('');
 
         container.innerHTML = html;
     } catch (e) {
+        const container = document.getElementById('cameras-status');
+        container.innerHTML = '<p class="error">Failed to load. <a href="#" onclick="loadCamerasStatus(); return false;">Retry</a></p>';
         console.error('Failed to load cameras', e);
     }
 }
@@ -97,6 +99,8 @@ async function loadStorageStats() {
             <p><span class="legend-dot exports"></span> Exports: ${exportsMB} MB (${stats.exports.total_files} files)</p>
         `;
     } catch (e) {
+        const container = document.getElementById('storage-stats');
+        container.innerHTML = '<p class="error">Failed to load. <a href="#" onclick="loadStorageStats(); return false;">Retry</a></p>';
         console.error('Failed to load storage stats', e);
     }
 }
@@ -115,7 +119,7 @@ async function loadSchedulesStatus() {
 
         const html = enabledSchedules.slice(0, 5).map(s => `
             <div class="schedule-item">
-                <span class="schedule-name">${s.camera}</span>
+                <span class="schedule-name">${escapeHtml(s.camera)}</span>
                 <span class="schedule-freq">${s.frequency}</span>
                 ${s.time_window ? `<span class="schedule-window">${s.time_window.start} - ${s.time_window.end}</span>` : ''}
             </div>
@@ -127,6 +131,8 @@ async function loadSchedulesStatus() {
             container.innerHTML += `<p class="muted">+ ${enabledSchedules.length - 5} more</p>`;
         }
     } catch (e) {
+        const container = document.getElementById('schedules-status');
+        container.innerHTML = '<p class="error">Failed to load. <a href="#" onclick="loadSchedulesStatus(); return false;">Retry</a></p>';
         console.error('Failed to load schedules', e);
     }
 }
@@ -143,9 +149,9 @@ async function loadRecentCaptures() {
 
         const html = captures.map(cap => `
             <div class="capture-thumb">
-                <img src="/api/captures/${cap.path}" alt="${cap.camera}" loading="lazy">
+                <img src="/api/captures/${cap.path}" alt="${escapeHtml(cap.camera)}" loading="lazy">
                 <div class="capture-info">
-                    <span class="capture-camera">${cap.camera}</span>
+                    <span class="capture-camera">${escapeHtml(cap.camera)}</span>
                     <span class="capture-time">${formatTime(cap.timestamp)}</span>
                 </div>
             </div>
@@ -153,6 +159,8 @@ async function loadRecentCaptures() {
 
         container.innerHTML = html;
     } catch (e) {
+        const container = document.getElementById('recent-captures');
+        container.innerHTML = '<p class="error">Failed to load. <a href="#" onclick="loadRecentCaptures(); return false;">Retry</a></p>';
         console.error('Failed to load captures', e);
     }
 }

@@ -123,37 +123,39 @@ async function loadCameras() {
         const html = cameras.map(cam => `
             <div class="camera-card">
                 <div class="camera-header">
-                    <h3>${cam.name}</h3>
+                    <h3>${escapeHtml(cam.name)}</h3>
                     <span class="status-badge ${cam.enabled ? 'enabled' : 'disabled'}">
                         ${cam.enabled ? 'Enabled' : 'Disabled'}
                     </span>
                 </div>
                 ${cam.last_capture_path ? `
-                <div class="camera-preview" onclick="viewCamera('${cam.name}')">
+                <div class="camera-preview" onclick="viewCamera(decodeURIComponent('${encodeURIComponent(cam.name)}'))">
                     <img src="/api/captures/${cam.last_capture_path}" alt="Latest capture" loading="lazy">
                     <span class="preview-time">${formatTime(cam.last_capture_time)}</span>
                 </div>
                 ` : `
-                <div class="camera-preview camera-preview-empty" onclick="captureNow('${cam.name}')">
+                <div class="camera-preview camera-preview-empty" onclick="captureNow(decodeURIComponent('${encodeURIComponent(cam.name)}'))">
                     <span>No captures yet<br>Click to capture</span>
                 </div>
                 `}
                 <div class="camera-body">
-                    <p class="camera-url" title="${cam.url}">${truncateUrl(cam.url)}</p>
+                    <p class="camera-url" title="${escapeHtml(cam.url)}">${truncateUrl(cam.url)}</p>
                     <p><strong>${cam.capture_count}</strong> captures</p>
                     <p><strong>${cam.schedules.filter(s => s.enabled).length}</strong> active schedules</p>
                 </div>
                 <div class="camera-actions">
-                    <button class="btn btn-sm btn-secondary" onclick="viewCamera('${cam.name}')">View</button>
-                    <button class="btn btn-sm btn-secondary" onclick="captureNow('${cam.name}')">Capture</button>
-                    <button class="btn btn-sm btn-secondary" onclick="editCamera('${cam.name}')">Edit</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteCamera('${cam.name}')">Delete</button>
+                    <button class="btn btn-sm btn-secondary" onclick="viewCamera(decodeURIComponent('${encodeURIComponent(cam.name)}'))">View</button>
+                    <button class="btn btn-sm btn-secondary" onclick="captureNow(decodeURIComponent('${encodeURIComponent(cam.name)}'))">Capture</button>
+                    <button class="btn btn-sm btn-secondary" onclick="editCamera(decodeURIComponent('${encodeURIComponent(cam.name)}'))">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteCamera(decodeURIComponent('${encodeURIComponent(cam.name)}'))">Delete</button>
                 </div>
             </div>
         `).join('');
 
         container.innerHTML = html;
     } catch (e) {
+        const container = document.getElementById('cameras-list');
+        container.innerHTML = '<p class="error">Failed to load. <a href="#" onclick="loadCameras(); return false;">Retry</a></p>';
         console.error('Failed to load cameras', e);
     }
 }
@@ -217,8 +219,8 @@ async function loadCameraCaptures(name) {
 
         // Create thumbnails
         const html = captures.map((cap, idx) => `
-            <div class="thumbnail-item ${idx === 0 ? 'active' : ''}" onclick="selectCapture('${cap.path}', '${cap.timestamp}', this)">
-                <img src="/api/captures/${cap.path}" alt="${cap.filename}" loading="lazy">
+            <div class="thumbnail-item ${idx === 0 ? 'active' : ''}" onclick="selectCapture(decodeURIComponent('${encodeURIComponent(cap.path)}'), decodeURIComponent('${encodeURIComponent(cap.timestamp)}'), this)">
+                <img src="/api/captures/${cap.path}" alt="${escapeHtml(cap.filename)}" loading="lazy">
                 <span class="thumbnail-time">${formatTime(cap.timestamp)}</span>
             </div>
         `).join('');
@@ -406,7 +408,7 @@ async function addScheduleRow(schedule = null) {
                     Enabled
                 </label>
             </div>
-            <button type="button" class="btn btn-sm btn-danger" onclick="this.parentElement.parentElement.remove()">Remove</button>
+            <button type="button" class="btn btn-sm btn-danger" onclick="if(confirm('Remove this schedule?')) this.parentElement.parentElement.remove()">Remove</button>
         </div>
         <div class="form-row">
             <div class="form-group">

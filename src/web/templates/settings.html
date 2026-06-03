@@ -116,7 +116,7 @@ async function loadStorageInfo() {
         let camerasHtml = '';
         for (const [name, data] of Object.entries(stats.captures.cameras)) {
             const mb = (data.size_bytes / 1024 / 1024).toFixed(1);
-            camerasHtml += `<tr><td>${name}</td><td>${mb} MB</td><td>${data.file_count} files</td></tr>`;
+            camerasHtml += `<tr><td>${escapeHtml(name)}</td><td>${mb} MB</td><td>${data.file_count} files</td></tr>`;
         }
 
         container.innerHTML = `
@@ -281,7 +281,7 @@ async function searchLocation() {
                  onclick="selectSearchResult(${r.lat}, ${r.lon}, this)"
                  onmouseover="this.style.background='var(--hover-bg, #f0f0f0)'"
                  onmouseout="this.style.background=''">
-                ${r.display_name}
+                ${escapeHtml(r.display_name)}
             </div>
         `).join('');
 

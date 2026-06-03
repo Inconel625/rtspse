@@ -1,6 +1,7 @@
 """Schedule management for RTSP captures."""
 
 import logging
+import threading
 from datetime import datetime, time, timedelta
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
@@ -23,6 +24,7 @@ class ScheduleManager:
         self._cameras: dict[str, CameraConfig] = {}
         self._job_ids: dict[str, list[str]] = {}  # camera_name -> list of job IDs
         self._location: Optional[LocationConfig] = None
+        self._lock = threading.Lock()
 
     def set_location(self, location: Optional[LocationConfig]) -> None:
         """Set the location for dawn/dusk calculations."""
@@ -35,8 +37,12 @@ class ScheduleManager:
     def start(self) -> None:
         """Start the scheduler."""
         if not self.scheduler.running:
-            self.scheduler.start()
-            logger.info("Scheduler started")
+            try:
+                self.scheduler.start()
+                logger.info("Scheduler started")
+            except Exception as e:
+                logger.error(f"Failed to start scheduler: {e}")
+                raise
 
     def stop(self) -> None:
         """Stop the scheduler."""
@@ -53,7 +59,7 @@ class ScheduleManager:
                 self._add_camera_schedules(camera)
 
     def _add_camera_schedules(self, camera: CameraConfig) -> None:
-        """Add all schedules for a camera."""
+        """Add all schedules for a camera. Caller must hold self._lock."""
         self._job_ids[camera.name] = []
 
         for schedule in camera.schedules:
@@ -298,13 +304,14 @@ class ScheduleManager:
             if job.id.startswith(prefix):
                 try:
                     self.scheduler.remove_job(job.id)
-                except Exception:
-                    pass
-        if camera.name in self._job_ids:
-            self._job_ids[camera.name] = [
-                jid for jid in self._job_ids[camera.name]
-                if not jid.startswith(prefix)
-            ]
+                except Exception as e:
+                    logger.warning(f"Failed to remove job {job.id}: {e}")
+        with self._lock:
+            if camera.name in self._job_ids:
+                self._job_ids[camera.name] = [
+                    jid for jid in self._job_ids[camera.name]
+                    if not jid.startswith(prefix)
+                ]
 
         dawn_dusk = self._get_dawn_dusk_window()
         if dawn_dusk:
@@ -330,8 +337,9 @@ class ScheduleManager:
                 replace_existing=True
             )
             # Track the _dd_ job ID so remove_camera/update_camera can clean it up
-            if camera.name in self._job_ids:
-                self._job_ids[camera.name].append(job_id)
+            with self._lock:
+                if camera.name in self._job_ids:
+                    self._job_ids[camera.name].append(job_id)
             logger.info(f"Dawn/dusk daily job at {capture_time} for {camera.name}: {job_id}")
 
     def get_dawn_dusk_times(self) -> Optional[dict]:
@@ -343,30 +351,35 @@ class ScheduleManager:
 
     def remove_camera(self, camera_name: str) -> None:
         """Remove all schedules for a camera."""
-        if camera_name in self._job_ids:
-            for job_id in self._job_ids[camera_name]:
-                try:
-                    self.scheduler.remove_job(job_id)
-                    logger.info(f"Removed job: {job_id}")
-                except Exception:
-                    pass
-            del self._job_ids[camera_name]
+        with self._lock:
+            if camera_name in self._job_ids:
+                for job_id in self._job_ids[camera_name]:
+                    try:
+                        self.scheduler.remove_job(job_id)
+                        logger.info(f"Removed job: {job_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to remove job {job_id}: {e}")
+                del self._job_ids[camera_name]
 
-        if camera_name in self._cameras:
-            del self._cameras[camera_name]
+            if camera_name in self._cameras:
+                del self._cameras[camera_name]
 
     def update_camera(self, camera: CameraConfig) -> None:
         """Update schedules for a camera."""
         self.remove_camera(camera.name)
-        self._cameras[camera.name] = camera
-        if camera.enabled:
-            self._add_camera_schedules(camera)
+        with self._lock:
+            self._cameras[camera.name] = camera
+            if camera.enabled:
+                self._add_camera_schedules(camera)
 
     def get_next_run_times(self) -> dict[str, list[dict]]:
         """Get next run times for all cameras."""
         result = {}
 
-        for camera_name, job_ids in self._job_ids.items():
+        with self._lock:
+            job_ids_snapshot = {name: list(ids) for name, ids in self._job_ids.items()}
+
+        for camera_name, job_ids in job_ids_snapshot.items():
             result[camera_name] = []
             for job_id in job_ids:
                 try:
@@ -376,8 +389,8 @@ class ScheduleManager:
                             "job_id": job_id,
                             "next_run": job.next_run_time.isoformat()
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to get next run time for job {job_id}: {e}")
 
         return result
 
