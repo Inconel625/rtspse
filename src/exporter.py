@@ -2,8 +2,10 @@
 
 import logging
 import os
+import re
 import subprocess
 import tempfile
+import threading
 import uuid
 from datetime import datetime, time
 from pathlib import Path
@@ -13,6 +15,25 @@ from zoneinfo import ZoneInfo
 from .models import ExportPreset, ExportHistory, LocationConfig
 
 logger = logging.getLogger(__name__)
+
+# Target-bitrate model, shared by the encoder and the size estimator so that the
+# estimate matches the actual output. Timelapses have low frame-to-frame
+# correlation, so they need a higher bits-per-pixel than normal video.
+# bitrate = clamp(BITRATE_BPP * width * height * fps, MIN, MAX). Tunable.
+BITRATE_BPP = 0.12
+BITRATE_MIN = 4_000_000
+BITRATE_MAX = 20_000_000
+
+# VAAPI render node used when hardware acceleration is enabled.
+VAAPI_DEVICE = "/dev/dri/renderD128"
+
+DEFAULT_DIMENSIONS = (1920, 1080)
+
+
+def target_bitrate(width: int, height: int, fps: int, factor: float = 1.0) -> int:
+    """Compute the capped target video bitrate (bits/s) for given output settings."""
+    raw = BITRATE_BPP * width * height * max(1, fps) * factor
+    return int(max(BITRATE_MIN, min(BITRATE_MAX, raw)))
 
 
 class ExportError(Exception):
@@ -24,18 +45,37 @@ class ExportProgress:
     """Tracks export progress."""
 
     def __init__(self, export_id: str, total_frames: int):
+        import time as time_mod
         self.export_id = export_id
         self.total_frames = total_frames
         self.current_frame = 0
         self.status = "pending"
         self.error: Optional[str] = None
         self.output_file: Optional[str] = None
+        self.cancelled = False
+        self.started_at: float = time_mod.time()
+        self.completed_at: Optional[float] = None
 
     @property
     def progress_percent(self) -> float:
         if self.total_frames == 0:
             return 0.0
         return min(100.0, (self.current_frame / self.total_frames) * 100)
+
+    @property
+    def eta_seconds(self) -> Optional[float]:
+        """Estimated seconds remaining, based on the encode rate so far."""
+        import time as time_mod
+        if self.status != "processing" or self.current_frame <= 1:
+            return None
+        elapsed = time_mod.time() - self.started_at
+        # Ignore the first couple of seconds: ffmpeg startup makes the early rate
+        # wildly inaccurate (a single frame would project a huge ETA).
+        if elapsed < 2.0:
+            return None
+        rate = self.current_frame / elapsed  # frames per second
+        remaining = max(0, self.total_frames - self.current_frame)
+        return remaining / rate if rate > 0 else None
 
     def to_dict(self) -> dict:
         return {
@@ -45,18 +85,113 @@ class ExportProgress:
             "progress_percent": self.progress_percent,
             "status": self.status,
             "error": self.error,
-            "output_file": self.output_file
+            "output_file": self.output_file,
+            "cancelled": self.cancelled,
+            "eta_seconds": self.eta_seconds
         }
 
 
 class Exporter:
     """Generates timelapse videos from captured images."""
 
-    def __init__(self, captures_path: Path, exports_path: Path):
+    def __init__(self, captures_path: Path, exports_path: Path, max_export_seconds: int = 7200,
+                 hwaccel: str = "none"):
         self.captures_path = Path(captures_path)
         self.exports_path = Path(exports_path)
         self.exports_path.mkdir(parents=True, exist_ok=True)
         self._active_exports: dict[str, ExportProgress] = {}
+        self._lock = threading.Lock()
+        self.max_export_seconds = max_export_seconds
+        self.hwaccel = hwaccel
+
+    def _vaapi_available(self) -> bool:
+        """True if VAAPI hardware encoding is enabled and the render node exists."""
+        return self.hwaccel == "auto" and os.path.exists(VAAPI_DEVICE)
+
+    def _probe_dimensions(self, image_path: Path) -> tuple[int, int]:
+        """Return (width, height) of an image via ffprobe, with a safe fallback."""
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x",
+                 str(image_path)],
+                capture_output=True, text=True, timeout=10
+            )
+            w, h = out.stdout.strip().split("x")
+            return int(w), int(h)
+        except Exception as e:
+            logger.warning(f"Could not probe dimensions for {image_path}: {e}")
+            return DEFAULT_DIMENSIONS
+
+    def _output_dimensions(self, preset: ExportPreset, sample_image: Optional[Path]) -> tuple[int, int]:
+        """Resolve the output resolution: explicit preset scaling, else source dims."""
+        if preset.width and preset.height:
+            return preset.width, preset.height
+        if sample_image is not None:
+            return self._probe_dimensions(sample_image)
+        return DEFAULT_DIMENSIONS
+
+    def _build_video_args(self, preset: ExportPreset, bitrate: int, smoothing: str = "none") -> list[str]:
+        """Build the codec/rate-control/filter args, preferring hardware encode.
+
+        Falls back to libx264 (software) when hardware acceleration is unavailable.
+        """
+        gop = str(max(1, round(preset.fps * 2)))
+        maxrate = bitrate
+        bufsize = bitrate * 2
+
+        # Software video filters, applied in order before any GPU upload.
+        filters = []
+        if preset.width and preset.height:
+            filters.append(f"scale={preset.width}:{preset.height}")
+        if smoothing == "blend":
+            # 2-frame rolling average: cross-dissolves adjacent frames to soften the
+            # timelapse strobe. Preserves the output frame count (progress stays exact).
+            filters.append("tmix=frames=2")
+
+        if self._vaapi_available():
+            # VAAPI path: software filters first, then upload frames to the GPU.
+            vf = ",".join(filters + ["format=nv12", "hwupload"])
+            return [
+                "-vaapi_device", VAAPI_DEVICE,
+                "-vf", vf,
+                "-c:v", "h264_vaapi",
+                "-b:v", str(bitrate), "-maxrate", str(maxrate), "-bufsize", str(bufsize),
+                "-g", gop,
+            ]
+
+        # Software path (libx264) with capped bitrate.
+        args = []
+        if filters:
+            args += ["-vf", ",".join(filters)]
+        args += [
+            "-c:v", preset.codec,
+            "-pix_fmt", preset.pixel_format,
+            "-preset", preset.ffmpeg_preset,
+            "-b:v", str(bitrate), "-maxrate", str(maxrate), "-bufsize", str(bufsize),
+            "-g", gop,
+        ]
+        return args
+
+    def _cleanup_stale_exports(self) -> None:
+        """Remove completed/failed exports older than 5 minutes. Must be called with self._lock held."""
+        import time as time_mod
+        now = time_mod.time()
+        stale_ids = [
+            eid for eid, p in self._active_exports.items()
+            if p.completed_at is not None and (now - p.completed_at) > 300
+        ]
+        for eid in stale_ids:
+            del self._active_exports[eid]
+
+    def cancel_export(self, export_id: str) -> bool:
+        """Cancel an active export by setting the cancelled flag."""
+        with self._lock:
+            progress = self._active_exports.get(export_id)
+            if progress and progress.status == "processing":
+                progress.cancelled = True
+                return True
+        return False
 
     def _get_dawn_dusk_for_date(self, location: LocationConfig, date) -> Optional[tuple[time, time]]:
         """Compute dawn and dusk times for a specific date and location."""
@@ -88,7 +223,9 @@ class Exporter:
         start_time: Optional[time] = None,
         end_time: Optional[time] = None,
         use_dawn_dusk: bool = False,
-        location: Optional[LocationConfig] = None
+        location: Optional[LocationConfig] = None,
+        export_id: Optional[str] = None,
+        smoothing: str = "none"
     ) -> ExportHistory:
         """
         Generate a timelapse video from captures.
@@ -105,7 +242,10 @@ class Exporter:
         Returns:
             ExportHistory with details of the generated video
         """
-        export_id = str(uuid.uuid4())[:8]
+        import time as time_mod
+
+        if export_id is None:
+            export_id = str(uuid.uuid4())[:8]
         images = self._get_images_in_range(camera, start_date, end_date, start_time, end_time,
                                            use_dawn_dusk=use_dawn_dusk, location=location)
 
@@ -113,7 +253,8 @@ class Exporter:
             raise ExportError(f"No images found for {camera} in the specified date range")
 
         progress = ExportProgress(export_id, len(images))
-        self._active_exports[export_id] = progress
+        with self._lock:
+            self._active_exports[export_id] = progress
 
         try:
             progress.status = "processing"
@@ -126,7 +267,13 @@ class Exporter:
 
             output_path = self.exports_path / output_name
 
-            self._run_ffmpeg(images, output_path, preset, progress)
+            self._run_ffmpeg(images, output_path, preset, progress, smoothing=smoothing)
+
+            if progress.cancelled:
+                progress.status = "cancelled"
+                if output_path.exists():
+                    output_path.unlink()
+                raise ExportError("Export was cancelled")
 
             progress.status = "completed"
             progress.output_file = str(output_path)
@@ -163,8 +310,7 @@ class Exporter:
             raise ExportError(str(e))
 
         finally:
-            if export_id in self._active_exports:
-                del self._active_exports[export_id]
+            progress.completed_at = time_mod.time()
 
     def _get_images_in_range(
         self,
@@ -229,30 +375,41 @@ class Exporter:
         images: list[Path],
         output_path: Path,
         preset: ExportPreset,
-        progress: ExportProgress
+        progress: ExportProgress,
+        timeout: Optional[int] = None,
+        smoothing: str = "none"
     ) -> None:
-        """Run FFmpeg to generate the timelapse."""
+        """Run FFmpeg to generate the timelapse with real-time progress tracking."""
+        import time as time_mod
+
+        effective_timeout = timeout if timeout is not None else self.max_export_seconds
+
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
             for img in images:
                 escaped_path = str(img).replace("'", "'\\''")
                 f.write(f"file '{escaped_path}'\n")
             file_list_path = f.name
 
+        # Output resolution drives the target bitrate (probe source when not scaling).
+        out_w, out_h = self._output_dimensions(preset, images[0] if images else None)
+        bitrate = target_bitrate(out_w, out_h, preset.fps, preset.bitrate_factor)
+
+        process = None
         try:
             cmd = [
                 "ffmpeg",
                 "-y",
+                # -r as an INPUT option (before -i) sets the read rate for the concat
+                # demuxer, giving exactly one frame per image at the requested fps.
+                # (The concat demuxer rejects -framerate, and -r placed after -i adds a
+                # spurious trailing frame; it also previously defaulted the input to 25.)
+                "-r", str(preset.fps),
                 "-f", "concat",
                 "-safe", "0",
                 "-i", file_list_path,
-                "-framerate", str(preset.fps),
-                "-c:v", preset.codec,
-                "-pix_fmt", preset.pixel_format,
-                "-preset", preset.ffmpeg_preset,
             ]
 
-            if preset.width and preset.height:
-                cmd.extend(["-vf", f"scale={preset.width}:{preset.height}"])
+            cmd.extend(self._build_video_args(preset, bitrate, smoothing))
 
             # Enable faststart for web streaming (moves moov atom to beginning)
             cmd.extend(["-movflags", "+faststart"])
@@ -261,27 +418,61 @@ class Exporter:
 
             logger.debug(f"Running FFmpeg: {' '.join(cmd)}")
 
+            frame_re = re.compile(r"frame=\s*(\d+)")
+            start_time_ts = time_mod.time()
+
             process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 universal_newlines=True
             )
 
-            _, stderr = process.communicate()
+            for line in process.stderr:
+                m = frame_re.search(line)
+                if m:
+                    progress.current_frame = int(m.group(1))
+
+                if progress.cancelled:
+                    process.terminate()
+                    process.wait(timeout=5)
+                    return
+
+                if effective_timeout is not None:
+                    elapsed = time_mod.time() - start_time_ts
+                    if elapsed > effective_timeout:
+                        process.terminate()
+                        process.wait(timeout=5)
+                        raise ExportError(
+                            f"FFmpeg timed out after {int(elapsed)} seconds "
+                            f"(limit: {effective_timeout}s)"
+                        )
+
+            process.wait()
 
             if process.returncode != 0:
-                raise ExportError(f"FFmpeg failed: {stderr}")
+                raise ExportError(f"FFmpeg failed with return code {process.returncode}")
 
             progress.current_frame = len(images)
 
         finally:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
             os.unlink(file_list_path)
 
     def get_export_progress(self, export_id: str) -> Optional[dict]:
         """Get progress of an active export."""
-        if export_id in self._active_exports:
-            return self._active_exports[export_id].to_dict()
+        with self._lock:
+            self._cleanup_stale_exports()
+            progress = self._active_exports.get(export_id)
+            if progress is not None:
+                return progress.to_dict()
         return None
 
     def calculate_export_info(
@@ -293,7 +484,10 @@ class Exporter:
         start_time: Optional[time] = None,
         end_time: Optional[time] = None,
         use_dawn_dusk: bool = False,
-        location: Optional[LocationConfig] = None
+        location: Optional[LocationConfig] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        bitrate_factor: float = 1.0
     ) -> dict:
         """Calculate export statistics without generating."""
         images = self._get_images_in_range(camera, start_date, end_date, start_time, end_time,
@@ -301,7 +495,18 @@ class Exporter:
 
         image_count = len(images)
         duration_seconds = image_count / fps if fps > 0 else 0
-        estimated_size_mb = image_count * 0.05
+
+        # Estimate size from the same capped-bitrate model the encoder uses, so the
+        # estimate tracks the actual output: size = bitrate * duration / 8.
+        if image_count and fps > 0:
+            if width and height:
+                out_w, out_h = width, height
+            else:
+                out_w, out_h = self._probe_dimensions(images[0])
+            bitrate = target_bitrate(out_w, out_h, fps, bitrate_factor)
+            estimated_size_mb = (bitrate * duration_seconds / 8) / (1024 * 1024)
+        else:
+            estimated_size_mb = 0.0
 
         return {
             "image_count": image_count,

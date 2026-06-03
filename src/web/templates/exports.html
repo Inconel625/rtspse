@@ -11,20 +11,43 @@
         <form id="export-form" onsubmit="createExport(event)">
             <div class="form-group">
                 <label for="export-camera">Camera</label>
-                <select id="export-camera" required onchange="updatePreview()">
+                <select id="export-camera" required onchange="onCameraChange()">
                     <option value="">Select camera...</option>
                 </select>
             </div>
 
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="export-start">Start Date</label>
-                    <input type="date" id="export-start" required onchange="updatePreview()">
+            <div class="form-group">
+                <label>Date Range</label>
+                <div class="daterange" id="daterange">
+                    <button type="button" class="daterange-trigger" id="daterange-trigger"
+                            onclick="toggleDatePicker()" aria-haspopup="dialog" aria-expanded="false">
+                        <span class="daterange-icon">&#128197;</span>
+                        <span id="daterange-label">Select a camera first</span>
+                    </button>
+                    <div class="daterange-popover hidden" id="daterange-popover" role="dialog" aria-label="Select date range">
+                        <div class="cal-presets">
+                            <button type="button" class="cal-preset" onclick="applyPreset(7)">Last 7 days</button>
+                            <button type="button" class="cal-preset" onclick="applyPreset(30)">Last 30 days</button>
+                            <button type="button" class="cal-preset" onclick="applyPreset('all')">All</button>
+                        </div>
+                        <div class="cal-header">
+                            <button type="button" class="cal-nav" id="cal-prev" onclick="calNav(-1)" aria-label="Previous month">&#8249;</button>
+                            <div class="cal-title" id="cal-title"></div>
+                            <button type="button" class="cal-nav" id="cal-next" onclick="calNav(1)" aria-label="Next month">&#8250;</button>
+                        </div>
+                        <div class="cal-weekdays">
+                            <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+                        </div>
+                        <div class="cal-grid" id="cal-grid"></div>
+                        <div class="cal-legend">
+                            <span class="cal-legend-item"><span class="cal-dot"></span> has photos</span>
+                            <span class="cal-legend-item"><span class="cal-swatch cal-swatch-range"></span> selected</span>
+                            <span class="cal-legend-item"><span class="cal-swatch cal-swatch-empty"></span> no photos</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="export-end">End Date</label>
-                    <input type="date" id="export-end" required onchange="updatePreview()">
-                </div>
+                <input type="hidden" id="export-start">
+                <input type="hidden" id="export-end">
             </div>
 
             <div class="form-group">
@@ -59,6 +82,14 @@
             <div class="form-group">
                 <label for="export-fps">FPS: <span id="fps-value">30</span></label>
                 <input type="range" id="export-fps" min="1" max="60" value="30" oninput="updateFps(this.value)">
+            </div>
+
+            <div class="form-group">
+                <label for="export-smoothing">Smoothing</label>
+                <select id="export-smoothing">
+                    <option value="none">None</option>
+                    <option value="blend">Blend (soften frame transitions)</option>
+                </select>
             </div>
 
             <div id="export-preview" class="export-preview">
@@ -111,14 +142,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     await loadCameras();
     await loadExports();
 
-    // Set default dates
-    const today = new Date();
-    const lastWeek = new Date(today);
-    lastWeek.setDate(lastWeek.getDate() - 7);
-
-    document.getElementById('export-start').value = lastWeek.toISOString().split('T')[0];
-    document.getElementById('export-end').value = today.toISOString().split('T')[0];
-
+    // Date range is populated once a camera is selected (see onCameraChange).
     // Initialize time inputs state
     toggleTimeFilter();
 });
@@ -186,20 +210,22 @@ async function loadExports() {
         const html = data.exports.map(exp => `
             <div class="export-item">
                 <div class="export-info">
-                    <strong>${exp.filename}</strong>
+                    <strong>${escapeHtml(exp.filename)}</strong>
                     <span class="export-size">${formatSize(exp.size_bytes)}</span>
                     <span class="export-date">${formatTime(exp.created_at)}</span>
                 </div>
                 <div class="export-actions">
-                    <button class="btn btn-sm btn-secondary" onclick="playVideo('${exp.filename}')">Play</button>
-                    <a href="/api/exports/${exp.filename}" class="btn btn-sm btn-primary" download>Download</a>
-                    <button class="btn btn-sm btn-danger" onclick="deleteExport('${exp.filename}')">Delete</button>
+                    <button class="btn btn-sm btn-secondary" onclick="playVideo(decodeURIComponent('${encodeURIComponent(exp.filename)}'))">Play</button>
+                    <a href="/api/exports/${encodeURIComponent(exp.filename)}" class="btn btn-sm btn-primary" download>Download</a>
+                    <button class="btn btn-sm btn-danger" onclick="deleteExport(decodeURIComponent('${encodeURIComponent(exp.filename)}'))">Delete</button>
                 </div>
             </div>
         `).join('');
 
         container.innerHTML = html;
     } catch (e) {
+        const container = document.getElementById('export-history');
+        container.innerHTML = '<p class="error">Failed to load. <a href="#" onclick="loadExports(); return false;">Retry</a></p>';
         console.error('Failed to load exports', e);
     }
 }
@@ -207,6 +233,204 @@ async function loadExports() {
 function updateFps(value) {
     document.getElementById('fps-value').textContent = value;
     updatePreview();
+}
+
+function formatEta(seconds) {
+    if (seconds == null || !isFinite(seconds)) return '';
+    const s = Math.max(0, Math.round(seconds));
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+// ===== Date range picker (availability-aware) =====
+let capDays = {};            // { 'YYYY-MM-DD': count }
+let capMin = null, capMax = null;   // available range bounds (ISO strings)
+let viewY = null, viewM = null;     // currently displayed month (viewM 0-based)
+let selStart = null, selEnd = null; // selected range (ISO strings)
+let hoverDay = null;                // tentative end while picking
+
+const pad2 = n => String(n).padStart(2, '0');
+const iso = (y, m, d) => `${y}-${pad2(m + 1)}-${pad2(d)}`;        // m is 0-based
+const isoParts = s => { const [y, m, d] = s.split('-').map(Number); return { y, m: m - 1, d }; };
+const minISO = (a, b) => (a < b ? a : b);
+const maxISO = (a, b) => (a > b ? a : b);
+
+function addDaysISO(s, n) {
+    const { y, m, d } = isoParts(s);
+    const dt = new Date(y, m, d);
+    dt.setDate(dt.getDate() + n);
+    return iso(dt.getFullYear(), dt.getMonth(), dt.getDate());
+}
+function clampISO(s, lo, hi) {
+    if (lo && s < lo) return lo;
+    if (hi && s > hi) return hi;
+    return s;
+}
+function fmtDay(s, withYear) {
+    const { y, m, d } = isoParts(s);
+    return new Date(y, m, d).toLocaleDateString(undefined,
+        withYear ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' });
+}
+function fmtLabel() {
+    if (!selStart) return 'Select date range';
+    if (!selEnd) return fmtDay(selStart, true) + ' – …';
+    if (selStart === selEnd) return fmtDay(selStart, true);
+    return `${fmtDay(selStart)} – ${fmtDay(selEnd, true)}`;
+}
+
+async function onCameraChange() {
+    const camera = document.getElementById('export-camera').value;
+    capDays = {}; capMin = null; capMax = null;
+    selStart = null; selEnd = null; hoverDay = null;
+
+    if (camera) {
+        try {
+            const data = await api.get(`/cameras/${encodeURIComponent(camera)}/capture-dates`);
+            capDays = data.days || {};
+            capMin = data.min_date;
+            capMax = data.max_date;
+        } catch (e) {
+            console.error('Failed to load capture dates', e);
+        }
+    }
+
+    if (capMax) {
+        // Default to the most recent week that actually has photos.
+        selEnd = capMax;
+        selStart = clampISO(addDaysISO(capMax, -6), capMin, capMax);
+        const vp = isoParts(capMax);
+        viewY = vp.y; viewM = vp.m;
+    } else {
+        const now = new Date();
+        viewY = now.getFullYear(); viewM = now.getMonth();
+    }
+
+    setHiddenDates();
+    renderTrigger();
+    renderCalendar();
+    updatePreview();
+}
+
+function setHiddenDates() {
+    document.getElementById('export-start').value = (selStart && selEnd) ? selStart : '';
+    document.getElementById('export-end').value = (selStart && selEnd) ? selEnd : '';
+}
+
+function renderTrigger() {
+    const label = document.getElementById('daterange-label');
+    const camera = document.getElementById('export-camera').value;
+    if (!camera) { label.textContent = 'Select a camera first'; return; }
+    if (!capMax) { label.textContent = 'No photos for this camera'; return; }
+    label.textContent = fmtLabel();
+}
+
+function toggleDatePicker() {
+    const pop = document.getElementById('daterange-popover');
+    pop.classList.contains('hidden') ? openDatePicker() : closeDatePicker();
+}
+function openDatePicker() {
+    if (!document.getElementById('export-camera').value || !capMax) return;
+    document.getElementById('daterange-popover').classList.remove('hidden');
+    document.getElementById('daterange-trigger').setAttribute('aria-expanded', 'true');
+    renderCalendar();
+    setTimeout(() => document.addEventListener('click', outsideClose), 0);
+}
+function closeDatePicker() {
+    // Abandoned mid-selection: revert to the last committed (hidden) range.
+    if (selStart && !selEnd) {
+        selStart = document.getElementById('export-start').value || null;
+        selEnd = document.getElementById('export-end').value || null;
+        renderTrigger();
+    }
+    document.getElementById('daterange-popover').classList.add('hidden');
+    document.getElementById('daterange-trigger').setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', outsideClose);
+}
+function outsideClose(e) {
+    if (!document.getElementById('daterange').contains(e.target)) closeDatePicker();
+}
+
+function calNav(delta) {
+    let m = viewM + delta, y = viewY;
+    while (m < 0) { m += 12; y--; }
+    while (m > 11) { m -= 12; y++; }
+    const mk = `${y}-${pad2(m + 1)}`;
+    if (capMin && mk < capMin.slice(0, 7)) return;
+    if (capMax && mk > capMax.slice(0, 7)) return;
+    viewY = y; viewM = m;
+    renderCalendar();
+}
+
+function applyPreset(kind) {
+    if (!capMax) return;
+    if (kind === 'all') {
+        selStart = capMin; selEnd = capMax;
+    } else {
+        selEnd = capMax;
+        selStart = clampISO(addDaysISO(capMax, -(kind - 1)), capMin, capMax);
+    }
+    const vp = isoParts(capMax);
+    viewY = vp.y; viewM = vp.m;
+    setHiddenDates(); renderTrigger(); renderCalendar(); updatePreview();
+}
+
+function pickDay(dISO) {
+    if (!selStart || (selStart && selEnd)) {
+        selStart = dISO; selEnd = null;        // begin a new range
+    } else if (dISO < selStart) {
+        selEnd = selStart; selStart = dISO;    // complete (clicked earlier day)
+    } else {
+        selEnd = dISO;                         // complete
+    }
+    hoverDay = null;
+
+    if (selStart && selEnd) {
+        setHiddenDates(); renderTrigger(); renderCalendar(); updatePreview();
+        closeDatePicker();
+    } else {
+        renderTrigger(); renderCalendar();
+    }
+}
+function hoverDayFn(dISO) {
+    if (selStart && !selEnd) { hoverDay = dISO; renderCalendar(); }
+}
+
+function renderCalendar() {
+    if (viewY === null) return;
+    const mk = `${viewY}-${pad2(viewM + 1)}`;
+    const monthName = new Date(viewY, viewM, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    const monthCount = Object.keys(capDays).reduce((a, k) => k.slice(0, 7) === mk ? a + capDays[k] : a, 0);
+
+    document.getElementById('cal-title').innerHTML =
+        monthName + (monthCount ? ` <span class="cal-count">${monthCount} photos</span>` : '');
+    document.getElementById('cal-prev').disabled = !!capMin && mk <= capMin.slice(0, 7);
+    document.getElementById('cal-next').disabled = !!capMax && mk >= capMax.slice(0, 7);
+
+    const startDow = new Date(viewY, viewM, 1).getDay();
+    const daysInMonth = new Date(viewY, viewM + 1, 0).getDate();
+    const cells = [];
+    for (let i = 0; i < startDow; i++) cells.push('<span class="cal-cell cal-empty"></span>');
+
+    for (let d = 1; d <= daysInMonth; d++) {
+        const dISO = iso(viewY, viewM, d);
+        const count = capDays[dISO] || 0;
+        const cls = ['cal-cell', 'cal-day', count > 0 ? 'has-photos' : 'no-photos'];
+
+        if (selStart && selEnd && dISO >= selStart && dISO <= selEnd) cls.push('in-range');
+        if (selStart && !selEnd && hoverDay &&
+            dISO >= minISO(selStart, hoverDay) && dISO <= maxISO(selStart, hoverDay)) cls.push('in-range');
+        if (dISO === selStart) cls.push('range-start');
+        if (dISO === selEnd || (dISO === selStart && !selEnd)) cls.push('range-end');
+
+        if (count > 0) {
+            cells.push(`<button type="button" class="${cls.join(' ')}" title="${count} photo${count === 1 ? '' : 's'}" ` +
+                `onclick="pickDay('${dISO}')" onmouseenter="hoverDayFn('${dISO}')">${d}<span class="cal-dot"></span></button>`);
+        } else {
+            cells.push(`<button type="button" class="${cls.join(' ')}" disabled aria-disabled="true">${d}</button>`);
+        }
+    }
+    document.getElementById('cal-grid').innerHTML = cells.join('');
 }
 
 async function updatePreview() {
@@ -227,7 +451,8 @@ async function updatePreview() {
         camera: camera,
         start_date: startDate,
         end_date: endDate,
-        fps: fps
+        fps: fps,
+        preset: document.getElementById('export-preset').value
     };
 
     if (mode === 'custom') {
@@ -281,13 +506,12 @@ async function createExport(event) {
     btn.textContent = 'Generating...';
 
     document.getElementById('progress-modal').classList.remove('hidden');
+    document.getElementById('progress-fill').style.width = '0%';
+    document.getElementById('progress-text').textContent = 'Starting export...';
 
     const payload = {
-        camera: camera,
-        start_date: startDate,
-        end_date: endDate,
-        preset: preset,
-        fps: fps
+        camera, start_date: startDate, end_date: endDate, preset, fps,
+        smoothing: document.getElementById('export-smoothing').value
     };
 
     if (mode === 'custom') {
@@ -298,20 +522,64 @@ async function createExport(event) {
     }
 
     try {
-        const result = await api.post('/exports', payload);
+        const result = await api.post('/exports', payload, {timeout: 120000});
+        const exportId = result.export_id;
 
-        document.getElementById('progress-fill').style.width = '100%';
-        document.getElementById('progress-text').textContent = 'Complete!';
+        // Poll progress endpoint
+        const pollProgress = async () => {
+            try {
+                const progress = await api.get(`/exports/${exportId}/progress`);
 
-        setTimeout(() => {
-            document.getElementById('progress-modal').classList.add('hidden');
-            loadExports();
-        }, 1000);
+                if (progress.status === 'completed') {
+                    document.getElementById('progress-fill').style.width = '100%';
+                    document.getElementById('progress-text').textContent = 'Complete!';
+                    setTimeout(() => {
+                        document.getElementById('progress-modal').classList.add('hidden');
+                        document.getElementById('progress-fill').style.width = '0%';
+                        loadExports();
+                    }, 1500);
+                    btn.disabled = false;
+                    btn.textContent = 'Generate Timelapse';
+                    return;
+                }
+
+                if (progress.status === 'failed') {
+                    document.getElementById('progress-modal').classList.add('hidden');
+                    alert('Export failed: ' + (progress.error || 'Unknown error'));
+                    btn.disabled = false;
+                    btn.textContent = 'Generate Timelapse';
+                    return;
+                }
+
+                // Update progress bar
+                const pct = progress.total_frames > 0
+                    ? Math.min(99, Math.round(progress.current_frame / progress.total_frames * 100))
+                    : 0;
+                document.getElementById('progress-fill').style.width = pct + '%';
+                const eta = formatEta(progress.eta_seconds);
+                document.getElementById('progress-text').textContent =
+                    `Processing frame ${progress.current_frame} / ${progress.total_frames} (${pct}%)` +
+                    (eta ? ` · ~${eta} left` : '');
+            } catch (e) {
+                // Progress endpoint returned 404 — export finished and was cleaned up
+                document.getElementById('progress-fill').style.width = '100%';
+                document.getElementById('progress-text').textContent = 'Complete!';
+                setTimeout(() => {
+                    document.getElementById('progress-modal').classList.add('hidden');
+                    document.getElementById('progress-fill').style.width = '0%';
+                    loadExports();
+                }, 1500);
+                btn.disabled = false;
+                btn.textContent = 'Generate Timelapse';
+                return;
+            }
+            setTimeout(pollProgress, 1000);
+        };
+        setTimeout(pollProgress, 1000);
 
     } catch (e) {
         document.getElementById('progress-modal').classList.add('hidden');
         alert('Export failed: ' + e.message);
-    } finally {
         btn.disabled = false;
         btn.textContent = 'Generate Timelapse';
     }

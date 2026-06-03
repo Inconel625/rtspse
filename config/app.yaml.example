@@ -1,0 +1,33 @@
+# RTSP Timelapse Generator - Application Configuration
+# Copy this file to app.yaml and customize as needed.
+
+web_ui:
+  enabled: true
+  host: 0.0.0.0
+  port: 5050
+  auth_enabled: false
+  username: admin
+  password: changeme  # Change this! A random password is generated on first run.
+
+storage:
+  captures_path: captures      # Relative to project root, or use absolute path
+  exports_path: exports
+  logs_path: logs
+  max_log_size_mb: 100
+
+log_level: INFO
+
+export:
+  # Video encoding hardware acceleration:
+  #   none - software encoding with libx264 (default, always works)
+  #   auto - use Intel/AMD VAAPI (/dev/dri/renderD128) when available, else software.
+  #          On Proxmox, pass the host iGPU into the container/VM first, e.g. for an
+  #          LXC add to its config: dev0: /dev/dri/renderD128
+  hwaccel: none
+
+# Optional: Configure location for dawn/dusk schedule calculations
+# location:
+#   latitude: 51.5074
+#   longitude: -0.1278
+#   elevation: 0.0
+#   timezone: ""  # Auto-detected from coordinates if left empty

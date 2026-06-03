@@ -26,6 +26,7 @@ schedule_manager: ScheduleManager = None
 exporter: Exporter = None
 config_observer: Observer = None
 shutdown_event = threading.Event()
+_reload_lock = threading.Lock()
 
 
 class ConfigFileHandler(FileSystemEventHandler):
@@ -34,16 +35,18 @@ class ConfigFileHandler(FileSystemEventHandler):
     def __init__(self, callback):
         self.callback = callback
         self._debounce_timer = None
+        self._timer_lock = threading.Lock()
 
     def on_modified(self, event):
         if event.is_directory:
             return
 
         if event.src_path.endswith('.yaml'):
-            if self._debounce_timer:
-                self._debounce_timer.cancel()
-            self._debounce_timer = threading.Timer(1.0, self._trigger_reload, [event.src_path])
-            self._debounce_timer.start()
+            with self._timer_lock:
+                if self._debounce_timer:
+                    self._debounce_timer.cancel()
+                self._debounce_timer = threading.Timer(1.0, self._trigger_reload, [event.src_path])
+                self._debounce_timer.start()
 
     def _trigger_reload(self, path):
         logger.info(f"Config file changed: {path}")
@@ -101,6 +104,9 @@ def handle_config_reload() -> None:
     """Handle configuration reload."""
     global config_manager, schedule_manager
 
+    if not _reload_lock.acquire(blocking=False):
+        logger.debug("Config reload already in progress, skipping")
+        return
     try:
         old_cameras = dict(config_manager.cameras)
 
@@ -125,6 +131,8 @@ def handle_config_reload() -> None:
 
     except Exception as e:
         logger.error(f"Failed to reload configuration: {e}")
+    finally:
+        _reload_lock.release()
 
 
 def signal_handler(signum, frame) -> None:
@@ -173,7 +181,8 @@ def main() -> int:
         exports_path.mkdir(parents=True, exist_ok=True)
 
         capture_manager = CaptureManager(captures_path)
-        exporter = Exporter(captures_path, exports_path)
+        exporter = Exporter(captures_path, exports_path,
+                            hwaccel=config_manager.app_config.export.hwaccel)
         schedule_manager = ScheduleManager()
 
         schedule_manager.set_capture_callback(capture_callback)

@@ -1,5 +1,6 @@
 """Data models for RTSP Timelapse Generator."""
 
+import secrets
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from typing import Optional
@@ -102,6 +103,8 @@ class ExportPreset:
     codec: str = "libx264"
     ffmpeg_preset: str = "medium"
     pixel_format: str = "yuv420p"
+    # Multiplier on the computed target bitrate (e.g. 1.6 for a high-quality preset).
+    bitrate_factor: float = 1.0
 
     @classmethod
     def from_dict(cls, name: str, data: dict) -> "ExportPreset":
@@ -112,7 +115,8 @@ class ExportPreset:
             height=data.get("height"),
             codec=data.get("codec", "libx264"),
             ffmpeg_preset=data.get("ffmpeg_preset", "medium"),
-            pixel_format=data.get("pixel_format", "yuv420p")
+            pixel_format=data.get("pixel_format", "yuv420p"),
+            bitrate_factor=data.get("bitrate_factor", 1.0)
         )
 
 
@@ -124,7 +128,7 @@ class WebUIConfig:
     port: int = 5050
     auth_enabled: bool = False
     username: str = "admin"
-    password: str = "admin"
+    password: str = field(default_factory=lambda: secrets.token_urlsafe(16))
 
 
 @dataclass
@@ -157,12 +161,22 @@ class LocationConfig:
 
 
 @dataclass
+class ExportConfig:
+    """Export/encoding configuration."""
+    # Hardware acceleration mode for video encoding:
+    #   "none" -> software (libx264, always available)
+    #   "auto" -> use VAAPI if /dev/dri/renderD128 exists, else fall back to software
+    hwaccel: str = "none"
+
+
+@dataclass
 class AppConfig:
     """Application configuration."""
     web_ui: WebUIConfig = field(default_factory=WebUIConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     log_level: str = "INFO"
     location: Optional[LocationConfig] = None
+    export: ExportConfig = field(default_factory=ExportConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -186,11 +200,15 @@ class AppConfig:
 
         location = LocationConfig.from_dict(data.get("location"))
 
+        export_data = data.get("export", {})
+        export = ExportConfig(hwaccel=export_data.get("hwaccel", "none"))
+
         return cls(
             web_ui=web_ui,
             storage=storage,
             log_level=data.get("log_level", "INFO"),
-            location=location
+            location=location,
+            export=export
         )
 
 

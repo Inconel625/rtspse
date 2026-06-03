@@ -4,7 +4,7 @@
 
 // API helper
 const api = {
-    async request(method, path, data = null) {
+    async request(method, path, data = null, {timeout = 30000} = {}) {
         const options = {
             method: method,
             headers: {
@@ -16,30 +16,43 @@ const api = {
             options.body = JSON.stringify(data);
         }
 
-        const response = await fetch(`/api${path}`, options);
-        const json = await response.json();
+        const controller = new AbortController();
+        const timeoutId = timeout > 0 ? setTimeout(() => controller.abort(), timeout) : null;
+        options.signal = controller.signal;
 
-        if (!response.ok) {
-            throw new Error(json.error || 'Request failed');
+        try {
+            const response = await fetch(`/api${path}`, options);
+            const json = await response.json();
+
+            if (!response.ok) {
+                throw new Error(json.error || 'Request failed');
+            }
+
+            return json;
+        } catch (e) {
+            if (e.name === 'AbortError') {
+                throw new Error(`Request timed out after ${Math.round(timeout / 1000)} seconds`);
+            }
+            throw e;
+        } finally {
+            if (timeoutId) clearTimeout(timeoutId);
         }
-
-        return json;
     },
 
-    get(path) {
-        return this.request('GET', path);
+    get(path, opts) {
+        return this.request('GET', path, null, opts);
     },
 
-    post(path, data) {
-        return this.request('POST', path, data);
+    post(path, data, opts) {
+        return this.request('POST', path, data, opts);
     },
 
-    put(path, data) {
-        return this.request('PUT', path, data);
+    put(path, data, opts) {
+        return this.request('PUT', path, data, opts);
     },
 
-    delete(path) {
-        return this.request('DELETE', path);
+    delete(path, opts) {
+        return this.request('DELETE', path, null, opts);
     }
 };
 
@@ -272,6 +285,13 @@ document.addEventListener('DOMContentLoaded', function() {
     initDarkMode();
 });
 
+// HTML escaping for XSS prevention
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 // Export API for use in templates
 window.api = api;
 window.formatBytes = formatBytes;
@@ -285,3 +305,4 @@ window.startAutoRefresh = startAutoRefresh;
 window.stopAutoRefresh = stopAutoRefresh;
 window.debounce = debounce;
 window.throttle = throttle;
+window.escapeHtml = escapeHtml;

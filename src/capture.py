@@ -1,8 +1,10 @@
 """RTSP capture module for capturing frames from camera streams."""
 
 import logging
+import shutil
+import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -63,37 +65,69 @@ class CaptureManager:
         logger.error(f"All capture attempts failed for '{camera.name}': {last_error}")
         return None
 
+    def _capture_with_timeout(self, target, timeout_seconds: float):
+        """Run target() in a daemon thread with a hard timeout.
+
+        Returns the result of target(). Raises CaptureError on timeout or if
+        target raises an exception.
+        """
+        outcome = []  # [result] on success, [None, exc] on failure
+
+        def runner():
+            try:
+                outcome.append(target())
+            except Exception as e:
+                outcome.append(None)
+                outcome.append(e)
+
+        t = threading.Thread(target=runner, daemon=True)
+        t.start()
+        t.join(timeout=timeout_seconds)
+
+        if t.is_alive():
+            raise CaptureError("Capture timed out")
+
+        if len(outcome) == 2:
+            raise outcome[1]
+
+        return outcome[0]
+
     def _do_capture(
         self,
         camera: CameraConfig,
         settings: CaptureSettings
     ) -> Path:
         """Execute a single capture attempt."""
-        cap = cv2.VideoCapture(camera.url)
+        free = shutil.disk_usage(self.captures_path).free
+        if free < 100 * 1024 * 1024:  # 100MB minimum
+            raise CaptureError(f"Insufficient disk space: {free / 1024 / 1024:.0f}MB free")
 
-        try:
-            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, settings.timeout_seconds * 1000)
-            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, settings.timeout_seconds * 1000)
+        def _capture():
+            cap = cv2.VideoCapture(camera.url)
+            try:
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, settings.timeout_seconds * 1000)
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, settings.timeout_seconds * 1000)
 
-            if not cap.isOpened():
-                raise CaptureError(f"Failed to open stream: {camera.url}")
+                if not cap.isOpened():
+                    raise CaptureError(f"Failed to open stream: {camera.url}")
 
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                raise CaptureError("Failed to read frame from stream")
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    raise CaptureError("Failed to read frame from stream")
 
-            output_path = self._get_output_path(camera.name)
-            encode_params = [cv2.IMWRITE_JPEG_QUALITY, settings.jpeg_quality]
+                output_path = self._get_output_path(camera.name)
+                encode_params = [cv2.IMWRITE_JPEG_QUALITY, settings.jpeg_quality]
 
-            success = cv2.imwrite(str(output_path), frame, encode_params)
-            if not success:
-                raise CaptureError(f"Failed to write image to {output_path}")
+                success = cv2.imwrite(str(output_path), frame, encode_params)
+                if not success:
+                    raise CaptureError(f"Failed to write image to {output_path}")
 
-            logger.info(f"Captured frame from '{camera.name}' -> {output_path}")
-            return output_path
+                logger.info(f"Captured frame from '{camera.name}' -> {output_path}")
+                return output_path
+            finally:
+                cap.release()
 
-        finally:
-            cap.release()
+        return self._capture_with_timeout(_capture, settings.timeout_seconds + 5)
 
     def _get_output_path(self, camera_name: str) -> Path:
         """Generate output path for a capture."""
@@ -120,34 +154,82 @@ class CaptureManager:
             "error": None
         }
 
-        cap = cv2.VideoCapture(url)
+        def _test():
+            cap = cv2.VideoCapture(url)
+            try:
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_seconds * 1000)
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_seconds * 1000)
+
+                if not cap.isOpened():
+                    result["error"] = "Failed to open stream"
+                    return result
+
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    result["error"] = "Failed to read frame"
+                    return result
+
+                result["success"] = True
+                result["width"] = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                result["height"] = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                result["fps"] = cap.get(cv2.CAP_PROP_FPS)
+
+                return result
+            except Exception as e:
+                result["error"] = str(e)
+                return result
+            finally:
+                cap.release()
 
         try:
-            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_seconds * 1000)
-            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_seconds * 1000)
-
-            if not cap.isOpened():
-                result["error"] = "Failed to open stream"
-                return result
-
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                result["error"] = "Failed to read frame"
-                return result
-
-            result["success"] = True
-            result["width"] = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            result["height"] = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            result["fps"] = cap.get(cv2.CAP_PROP_FPS)
-
-            return result
-
-        except Exception as e:
+            return self._capture_with_timeout(_test, timeout_seconds + 5)
+        except CaptureError as e:
             result["error"] = str(e)
             return result
 
-        finally:
-            cap.release()
+    def cleanup_old_captures(self, max_age_days: int = 30) -> dict:
+        """Delete capture files older than max_age_days and remove empty month dirs."""
+        cutoff = datetime.now() - timedelta(days=max_age_days)
+        deleted_files = 0
+        freed_bytes = 0
+
+        for camera_dir in self.captures_path.iterdir():
+            if not camera_dir.is_dir():
+                continue
+
+            for month_dir in sorted(camera_dir.iterdir()):
+                if not month_dir.is_dir():
+                    continue
+
+                for img_path in list(month_dir.iterdir()):
+                    if img_path.suffix != ".jpg":
+                        continue
+                    try:
+                        filename = img_path.stem
+                        date_str = "_".join(filename.split("_")[1:])
+                        capture_time = datetime.strptime(date_str, "%Y-%m-%d_%H-%M-%S")
+                    except ValueError:
+                        continue
+
+                    if capture_time < cutoff:
+                        size = img_path.stat().st_size
+                        logger.info(f"Deleting old capture: {img_path}")
+                        img_path.unlink()
+                        deleted_files += 1
+                        freed_bytes += size
+
+                # Remove empty month directory
+                try:
+                    month_dir.rmdir()
+                    logger.debug(f"Removed empty directory: {month_dir}")
+                except OSError:
+                    pass  # Not empty, leave it
+
+        logger.info(
+            f"Cleanup complete: deleted {deleted_files} files, "
+            f"freed {freed_bytes / 1024 / 1024:.1f}MB"
+        )
+        return {"deleted_files": deleted_files, "freed_bytes": freed_bytes}
 
     def get_captures_for_camera(
         self,
@@ -180,33 +262,88 @@ class CaptureManager:
         captures.sort(key=lambda p: p.name)
         return captures
 
+    def get_capture_date_counts(self, camera_name: str) -> dict[str, int]:
+        """Return a map of 'YYYY-MM-DD' -> number of captures for a camera.
+
+        Dates are parsed from filenames (no files are opened), so this stays
+        cheap even for large libraries. Used by the export date picker to show
+        which days have photos available.
+        """
+        camera_dir = self.captures_path / camera_name
+
+        if not camera_dir.exists():
+            return {}
+
+        counts: dict[str, int] = {}
+        for img_path in camera_dir.rglob("*.jpg"):
+            filename = img_path.stem
+            # Filenames look like "<camera>_YYYY-MM-DD_HH-MM-SS"; the date is the
+            # first dash-delimited token after the camera-name prefix.
+            parts = filename.split("_")
+            if len(parts) < 3:
+                continue
+            day = parts[-2]
+            if len(day) == 10 and day[4] == "-" and day[7] == "-":
+                counts[day] = counts.get(day, 0) + 1
+
+        return counts
+
     def get_recent_captures(self, limit: int = 20) -> list[dict]:
         """Get most recent captures across all cameras."""
-        all_captures = []
+        # Collect up to `limit` most-recent files per camera by scanning month
+        # directories newest-first, stopping early once we have enough.
+        per_camera: list[dict] = []
 
         for camera_dir in self.captures_path.iterdir():
             if not camera_dir.is_dir():
                 continue
 
             camera_name = camera_dir.name
+            camera_captures: list[dict] = []
 
-            for img_path in camera_dir.rglob("*.jpg"):
+            try:
+                month_dirs = sorted(
+                    (d for d in camera_dir.iterdir() if d.is_dir()),
+                    reverse=True
+                )
+            except OSError:
+                continue
+
+            for month_dir in month_dirs:
                 try:
-                    filename = img_path.stem
-                    date_str = "_".join(filename.split("_")[1:])
-                    capture_time = datetime.strptime(date_str, "%Y-%m-%d_%H-%M-%S")
+                    jpg_files = sorted(
+                        (f for f in month_dir.iterdir() if f.suffix == ".jpg"),
+                        key=lambda p: p.name,
+                        reverse=True
+                    )
+                except OSError:
+                    continue
 
-                    all_captures.append({
+                for img_path in jpg_files:
+                    try:
+                        filename = img_path.stem
+                        date_str = "_".join(filename.split("_")[1:])
+                        capture_time = datetime.strptime(date_str, "%Y-%m-%d_%H-%M-%S")
+                    except ValueError:
+                        continue
+
+                    camera_captures.append({
                         "camera": camera_name,
                         "path": str(img_path.relative_to(self.captures_path)),
                         "timestamp": capture_time.isoformat() + 'Z',
                         "filename": img_path.name
                     })
-                except ValueError:
-                    continue
 
-        all_captures.sort(key=lambda x: x["timestamp"], reverse=True)
-        return all_captures[:limit]
+                    if len(camera_captures) >= limit:
+                        break
+
+                if len(camera_captures) >= limit:
+                    break
+
+            per_camera.extend(camera_captures)
+
+        per_camera.sort(key=lambda x: x["timestamp"], reverse=True)
+        return per_camera[:limit]
 
     def get_storage_stats(self) -> dict:
         """Get storage statistics for captures."""

@@ -5,6 +5,7 @@ import functools
 import hmac
 import logging
 import os
+import threading
 import uuid
 from datetime import datetime, time
 from pathlib import Path
@@ -52,6 +53,11 @@ pages = Blueprint('pages', __name__)
 def _is_safe_path(base: Path, target: Path) -> bool:
     """Return True if target resolves inside base (prevents path traversal)."""
     return str(target.resolve()).startswith(str(base.resolve()))
+
+
+def _clamp(value, min_val, max_val):
+    """Clamp a numeric value to [min_val, max_val]."""
+    return max(min_val, min(max_val, value))
 
 
 def _schedule_to_dict(s: Schedule) -> dict:
@@ -136,6 +142,24 @@ def list_cameras():
     return jsonify(cameras)
 
 
+@api.route('/cameras/<name>/capture-dates', methods=['GET'])
+@require_auth
+def camera_capture_dates(name):
+    """Per-day capture counts for a camera, for the export date picker."""
+    if name not in _config_manager.cameras:
+        return jsonify({'error': 'Camera not found'}), 404
+
+    days = _capture_manager.get_capture_date_counts(name)
+    sorted_days = sorted(days.keys())
+    return jsonify({
+        'camera': name,
+        'days': days,
+        'min_date': sorted_days[0] if sorted_days else None,
+        'max_date': sorted_days[-1] if sorted_days else None,
+        'total': sum(days.values()),
+    })
+
+
 @api.route('/cameras', methods=['POST'])
 @require_auth
 def add_camera():
@@ -155,6 +179,9 @@ def add_camera():
     url = data.get('url', '').strip()
     if not url:
         return jsonify({'error': 'Camera URL is required'}), 400
+
+    if not _config_manager._validate_camera_url(url):
+        return jsonify({'error': 'Invalid URL. Must start with rtsp://, rtsps://, http://, or https://'}), 400
 
     schedules = []
     for sched_data in data.get('schedules', []):
@@ -181,9 +208,9 @@ def add_camera():
         enabled=data.get('enabled', True),
         schedules=schedules,
         capture_settings=CaptureSettings(
-            jpeg_quality=data.get('jpeg_quality', 90),
-            timeout_seconds=data.get('timeout_seconds', 10),
-            retry_count=data.get('retry_count', 3)
+            jpeg_quality=_clamp(data.get('jpeg_quality', 90), 1, 100),
+            timeout_seconds=_clamp(data.get('timeout_seconds', 10), 1, 120),
+            retry_count=_clamp(data.get('retry_count', 3), 0, 10)
         )
     )
 
@@ -233,9 +260,12 @@ def update_camera(name):
 
     if 'capture_settings' in data:
         cs = data['capture_settings']
-        camera.capture_settings.jpeg_quality = cs.get('jpeg_quality', camera.capture_settings.jpeg_quality)
-        camera.capture_settings.timeout_seconds = cs.get('timeout_seconds', camera.capture_settings.timeout_seconds)
-        camera.capture_settings.retry_count = cs.get('retry_count', camera.capture_settings.retry_count)
+        camera.capture_settings.jpeg_quality = _clamp(
+            cs.get('jpeg_quality', camera.capture_settings.jpeg_quality), 1, 100)
+        camera.capture_settings.timeout_seconds = _clamp(
+            cs.get('timeout_seconds', camera.capture_settings.timeout_seconds), 1, 120)
+        camera.capture_settings.retry_count = _clamp(
+            cs.get('retry_count', camera.capture_settings.retry_count), 0, 10)
 
     _config_manager.save_cameras_config()
     _schedule_manager.update_camera(camera)
@@ -360,26 +390,39 @@ def serve_capture(capture_path):
 @api.route('/exports', methods=['GET'])
 @require_auth
 def list_exports():
-    """List export history."""
+    """List export history with optional pagination."""
+    limit = request.args.get('limit', 50, type=int)
+    offset = request.args.get('offset', 0, type=int)
+
+    all_files = _exporter.list_exports()
+    all_history = _config_manager.export_history
+
+    paginated_files = all_files[offset:offset + limit]
+    paginated_history = [
+        {
+            'id': h.id,
+            'camera': h.camera,
+            'start_date': h.start_date.isoformat(),
+            'end_date': h.end_date.isoformat(),
+            'preset': h.preset,
+            'output_file': h.output_file,
+            'created_at': h.created_at.isoformat() + 'Z',
+            'image_count': h.image_count,
+            'duration_seconds': h.duration_seconds,
+            'file_size_bytes': h.file_size_bytes,
+            'start_time': h.start_time,
+            'end_time': h.end_time,
+        }
+        for h in all_history[offset:offset + limit]
+    ]
+
     return jsonify({
-        'exports': _exporter.list_exports(),
-        'history': [
-            {
-                'id': h.id,
-                'camera': h.camera,
-                'start_date': h.start_date.isoformat(),
-                'end_date': h.end_date.isoformat(),
-                'preset': h.preset,
-                'output_file': h.output_file,
-                'created_at': h.created_at.isoformat() + 'Z',
-                'image_count': h.image_count,
-                'duration_seconds': h.duration_seconds,
-                'file_size_bytes': h.file_size_bytes,
-                'start_time': h.start_time,
-                'end_time': h.end_time,
-            }
-            for h in _config_manager.export_history
-        ],
+        'exports': paginated_files,
+        'history': paginated_history,
+        'total_exports': len(all_files),
+        'total_history': len(all_history),
+        'limit': limit,
+        'offset': offset,
         'presets': {
             name: {
                 'fps': p.fps,
@@ -433,36 +476,35 @@ def create_export():
             end_time = datetime.strptime(data['end_time'], '%H:%M').time()
 
     location = _config_manager.app_config.location
+    export_id = str(uuid.uuid4())[:8]
 
-    try:
-        history = _exporter.generate_timelapse(
-            camera=camera,
-            start_date=start_date,
-            end_date=end_date,
-            preset=preset,
-            start_time=start_time,
-            end_time=end_time,
-            use_dawn_dusk=use_dawn_dusk,
-            location=location
-        )
+    smoothing = data.get('smoothing', 'none')
+    if smoothing not in ('none', 'blend'):
+        return jsonify({'error': 'Invalid smoothing option'}), 400
 
-        _config_manager.export_history.append(history)
-        _config_manager.save_exports_config()
+    def run_export():
+        try:
+            history = _exporter.generate_timelapse(
+                camera=camera,
+                start_date=start_date,
+                end_date=end_date,
+                preset=preset,
+                start_time=start_time,
+                end_time=end_time,
+                use_dawn_dusk=use_dawn_dusk,
+                location=location,
+                export_id=export_id,
+                smoothing=smoothing
+            )
+            _config_manager.export_history.append(history)
+            _config_manager.save_exports_config()
+        except Exception as e:
+            logger.error(f"Background export failed: {e}")
 
-        return jsonify({
-            'success': True,
-            'export': {
-                'id': history.id,
-                'output_file': history.output_file,
-                'image_count': history.image_count,
-                'duration_seconds': history.duration_seconds,
-                'file_size_bytes': history.file_size_bytes
-            }
-        })
+    thread = threading.Thread(target=run_export, daemon=True)
+    thread.start()
 
-    except Exception as e:
-        logger.error(f"Export failed: {e}")
-        return jsonify({'error': str(e)}), 500
+    return jsonify({'success': True, 'message': 'Export started', 'export_id': export_id}), 202
 
 
 @api.route('/exports/calculate', methods=['POST'])
@@ -496,9 +538,36 @@ def calculate_export():
 
     location = _config_manager.app_config.location
 
+    # Resolve output resolution from the selected preset so the size estimate uses
+    # the same bitrate model the encoder will.
+    preset = _config_manager.export_presets.get(data.get('preset', 'standard'))
+    width = preset.width if preset else None
+    height = preset.height if preset else None
+    bitrate_factor = preset.bitrate_factor if preset else 1.0
+
     info = _exporter.calculate_export_info(camera, start_date, end_date, fps, start_time, end_time,
-                                           use_dawn_dusk=use_dawn_dusk, location=location)
+                                           use_dawn_dusk=use_dawn_dusk, location=location,
+                                           width=width, height=height, bitrate_factor=bitrate_factor)
     return jsonify(info)
+
+
+@api.route('/exports/<export_id>/progress', methods=['GET'])
+@require_auth
+def export_progress(export_id):
+    """Get progress of an active export."""
+    progress = _exporter.get_export_progress(export_id)
+    if progress is None:
+        return jsonify({'error': 'Export not found'}), 404
+    return jsonify(progress)
+
+
+@api.route('/exports/<export_id>/cancel', methods=['POST'])
+@require_auth
+def cancel_export_route(export_id):
+    """Cancel an active export."""
+    if _exporter.cancel_export(export_id):
+        return jsonify({'success': True})
+    return jsonify({'error': 'Export not found or not cancellable'}), 404
 
 
 @api.route('/exports/<filename>', methods=['GET'])
@@ -528,7 +597,10 @@ def stream_export(filename):
     if not export_path.exists():
         abort(404)
 
-    return send_file(export_path, mimetype='video/mp4')
+    response = send_file(export_path, mimetype='video/mp4', conditional=True)
+    response.cache_control.max_age = 3600
+    response.cache_control.public = True
+    return response
 
 
 @api.route('/exports/<filename>', methods=['DELETE'])
@@ -578,11 +650,14 @@ def get_logs():
         return jsonify({'lines': []})
 
     try:
-        with open(logs_path, 'r') as f:
-            lines = f.readlines()
-
-        lines = lines[-limit:]
-        return jsonify({'lines': [l.strip() for l in lines]})
+        file_size = logs_path.stat().st_size
+        # Read at most 1MB from end of file
+        read_size = min(file_size, 1024 * 1024)
+        with open(logs_path, 'rb') as f:
+            f.seek(max(0, file_size - read_size))
+            data = f.read().decode('utf-8', errors='replace')
+        lines = data.splitlines()[-limit:]
+        return jsonify({'lines': lines})
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -616,6 +691,17 @@ def update_location():
 
     if latitude is None or longitude is None:
         return jsonify({'error': 'Latitude and longitude are required'}), 400
+
+    try:
+        lat = float(latitude)
+        lon = float(longitude)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Latitude and longitude must be numbers'}), 400
+
+    if not (-90 <= lat <= 90):
+        return jsonify({'error': 'Latitude must be between -90 and 90'}), 400
+    if not (-180 <= lon <= 180):
+        return jsonify({'error': 'Longitude must be between -180 and 180'}), 400
 
     _config_manager.app_config.location = LocationConfig(
         latitude=float(latitude),

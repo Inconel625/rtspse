@@ -148,9 +148,21 @@ Three built-in presets are available:
 
 | Preset | FPS | Resolution | FFmpeg Preset | Use Case |
 |--------|-----|------------|---------------|----------|
-| `standard` | 9 | Original | medium | General purpose |
+| `standard` | 15 | Original | veryfast | General purpose |
 | `fast_preview` | 15 | 854x480 | ultrafast | Quick previews |
-| `high_quality` | 60 | Original | slow | Final production |
+| `high_quality` | 60 | Original | fast (1.6× bitrate) | Final production |
+
+Encoding uses a capped target bitrate scaled to the output resolution (roughly
+7-8 Mbps at 1080p), which keeps file sizes reasonable and makes in-browser playback
+smooth. A preset's `bitrate_factor` multiplies that target for higher-quality output.
+
+### Hardware-accelerated encoding (optional)
+
+By default encoding runs on the CPU (libx264). On machines with an Intel/AMD iGPU you
+can offload encoding to the GPU via VAAPI by setting `export.hwaccel: auto` in
+`app.yaml`. The app uses `/dev/dri/renderD128` when present and automatically falls
+back to software if it is missing. On Proxmox, pass the host iGPU into the container/VM
+first (for an LXC, add `dev0: /dev/dri/renderD128` to its config).
 
 ## Usage
 

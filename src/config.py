@@ -1,6 +1,8 @@
 """Configuration loading and validation for RTSP Timelapse Generator."""
 
 import logging
+import secrets
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -77,7 +79,7 @@ class ConfigManager:
                 "port": 5050,
                 "auth_enabled": False,
                 "username": "admin",
-                "password": "admin"
+                "password": secrets.token_urlsafe(16)
             },
             "storage": {
                 "captures_path": "captures",
@@ -129,7 +131,7 @@ class ConfigManager:
                 "standard": {
                     "fps": 30,
                     "codec": "libx264",
-                    "ffmpeg_preset": "medium",
+                    "ffmpeg_preset": "veryfast",
                     "pixel_format": "yuv420p"
                 },
                 "fast_preview": {
@@ -143,8 +145,9 @@ class ConfigManager:
                 "high_quality": {
                     "fps": 60,
                     "codec": "libx264",
-                    "ffmpeg_preset": "slow",
-                    "pixel_format": "yuv420p"
+                    "ffmpeg_preset": "fast",
+                    "pixel_format": "yuv420p",
+                    "bitrate_factor": 1.6
                 }
             },
             "pending_exports": [],
@@ -213,6 +216,9 @@ class ConfigManager:
                 "max_log_size_mb": self.app_config.storage.max_log_size_mb,
             },
             "log_level": self.app_config.log_level,
+            "export": {
+                "hwaccel": self.app_config.export.hwaccel,
+            },
         }
 
         if self.app_config.location:
@@ -274,6 +280,10 @@ class ConfigManager:
             self.export_history = [
                 ExportHistory.from_dict(h) for h in history_data
             ]
+
+            # Trim history to prevent unbounded growth
+            if len(self.export_history) > 500:
+                self.export_history = self.export_history[-500:]
 
             logger.debug(f"Loaded {len(self.export_presets)} export presets")
         except Exception as e:
@@ -347,6 +357,8 @@ class ConfigManager:
                 preset_data["width"] = preset.width
             if preset.height:
                 preset_data["height"] = preset.height
+            if preset.bitrate_factor != 1.0:
+                preset_data["bitrate_factor"] = preset.bitrate_factor
             data["presets"][name] = preset_data
 
         for pending in self.pending_exports:
@@ -389,42 +401,46 @@ class ConfigManager:
     def get_captures_path(self) -> Path:
         """Get the captures directory path."""
         p = Path(self.app_config.storage.captures_path)
-        return p if p.is_absolute() else Path.cwd() / p
+        return p if p.is_absolute() else self.config_dir.parent / p
 
     def get_exports_path(self) -> Path:
         """Get the exports directory path."""
         p = Path(self.app_config.storage.exports_path)
-        return p if p.is_absolute() else Path.cwd() / p
+        return p if p.is_absolute() else self.config_dir.parent / p
 
     def get_logs_path(self) -> Path:
         """Get the logs directory path."""
         p = Path(self.app_config.storage.logs_path)
-        return p if p.is_absolute() else Path.cwd() / p
+        return p if p.is_absolute() else self.config_dir.parent / p
 
 
 # Global config instance
 _config_manager: Optional[ConfigManager] = None
+_config_lock = threading.Lock()
 
 
 def get_config() -> ConfigManager:
     """Get the global config manager instance."""
     global _config_manager
-    if _config_manager is None:
-        _config_manager = ConfigManager()
-        _config_manager.load_all()
-    return _config_manager
+    with _config_lock:
+        if _config_manager is None:
+            _config_manager = ConfigManager()
+            _config_manager.load_all()
+        return _config_manager
 
 
 def set_config(manager: ConfigManager) -> None:
     """Register a pre-built ConfigManager as the global instance."""
     global _config_manager
-    _config_manager = manager
+    with _config_lock:
+        _config_manager = manager
 
 
 def reload_config() -> ConfigManager:
     """Reload all configuration files."""
     global _config_manager
-    if _config_manager is None:
-        _config_manager = ConfigManager()
-    _config_manager.load_all()
-    return _config_manager
+    with _config_lock:
+        if _config_manager is None:
+            _config_manager = ConfigManager()
+        _config_manager.load_all()
+        return _config_manager
