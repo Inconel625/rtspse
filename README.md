@@ -2,6 +2,12 @@
 
 A Python application that captures frames from RTSP camera streams on configurable schedules and generates timelapse videos using FFmpeg.
 
+## Screenshots
+<img width="1365" height="765" alt="firefox_v52DyYJrdh" src="https://github.com/user-attachments/assets/b705efa9-a467-4387-b154-c90894856fbd" />
+<img width="1365" height="516" alt="firefox_92K9PVF0mU" src="https://github.com/user-attachments/assets/7d8c6931-80ca-4a23-92e2-2eee4c1aa7d2" />
+<img width="1368" height="494" alt="firefox_BXRUG08zoi" src="https://github.com/user-attachments/assets/97e14ca3-b00c-4558-99bb-06e54f204993" />
+
+
 ## Features
 
 - **RTSP Frame Capture** - Captures frames from any RTSP-compatible camera using OpenCV
